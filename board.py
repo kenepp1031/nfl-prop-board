@@ -27,7 +27,10 @@ def load_stats(season: int) -> dict:
     week or book is on screen."""
     years = list(range(season - LOOKBACK_SEASONS + 1, season + 1))
     weeks = nflverse.player_weeks(years, season)
-    baselines = model.player_baselines(weeks, season)
+    # Weeks players were ruled out, so the confidence meter can hold a player
+    # to the time he was available rather than to the whole calendar.
+    absences = nflverse.out_weeks(years, season)
+    baselines = model.player_baselines(weeks, season, absences)
     return {
         "weeks": weeks,
         "baselines": baselines,

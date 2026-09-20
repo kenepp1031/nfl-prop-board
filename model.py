@@ -29,6 +29,12 @@ SEASON_WEIGHT = {0: 1.00, 1: 0.45, 2: 0.15}   # 0 = current season, 1 = last, ..
 GAME_DECAY = 0.88                              # per game further back
 MIN_EFF_GAMES = 3.0                            # below this a player is "thin"
 
+# Weeks a player was ruled OUT are taken off the bottom of the confidence
+# fraction rather than counted against him -- see player_baselines. An
+# injury history can excuse time, but not the whole scale: a player who was
+# out all year and has played once is still someone we barely know.
+MAX_EXCUSED = 0.5                              # most of the reference injuries can forgive
+
 # --- player rate shrinkage -------------------------------------------------
 # A player's own efficiency and scoring rates are pulled toward his position
 # group's average until he has enough games to have earned them. Without this
@@ -289,13 +295,21 @@ def full_time_reference(weeks: list[dict], current_season: int) -> tuple[float, 
     return total, (total ** 2) / sum(w * w for w in ws)
 
 
-def player_baselines(weeks: list[dict], current_season: int) -> dict[str, dict]:
-    """Recency-weighted per-game volume, efficiency and game-to-game spread."""
+def player_baselines(weeks: list[dict], current_season: int,
+                     out_weeks: dict[str, set] | None = None) -> dict[str, dict]:
+    """Recency-weighted per-game volume, efficiency and game-to-game spread.
+
+    `out_weeks` is nflverse.out_weeks(): the weeks each player was ruled off
+    the field. It changes nothing about the projection -- only how much of
+    the calendar we hold him to when judging how well we know him.
+    """
+    absent = out_weeks or {}
     by_player: dict[str, list[dict]] = collections.defaultdict(list)
     for r in weeks:
         by_player[r["player_id"]].append(r)
 
     cal = timeline(weeks)
+    cal_weeks = set(cal)
     ref_weight, ref_ess = full_time_reference(weeks, current_season)
     out: dict[str, dict] = {}
     for pid, rows in by_player.items():
@@ -325,6 +339,22 @@ def player_baselines(weeks: list[dict], current_season: int) -> dict[str, dict]:
         w2 = sum(w * w for _, w in pairs)
         eff_games = (gw * gw / w2) if w2 else 0.0
 
+        # Time he was hurt is not time he failed to show us anything. Weeks he
+        # was ruled out -- and did not play anyway -- come off the REFERENCE,
+        # so the question becomes "how much of the time he was available have
+        # we seen him", not "how much of the calendar". Nothing here touches
+        # the projection or the shrinkage: we really do have fewer games on
+        # him, and the estimate is still made from the games we have. This is
+        # only about not calling a healthy starter unknown because of last
+        # October.
+        played = {(r["season"], r["week"]) for r, _ in pairs}
+        missed = [g for g in absent.get(pid, ())
+                  if g not in played and g in cal_weeks]
+        lost = sum(w for w in game_weights(
+            [{"season": s, "week": w} for s, w in missed], current_season, cal)
+            if w > 0)
+        avail_weight = max(ref_weight - lost, ref_weight * (1.0 - MAX_EXCUSED))
+
         base = {
             "player_id": pid,
             "name": last["name"],
@@ -336,6 +366,8 @@ def player_baselines(weeks: list[dict], current_season: int) -> dict[str, dict]:
             "eff_games": eff_games,
             "ref_ess": ref_ess,
             "ref_weight": ref_weight,
+            "avail_weight": avail_weight,
+            "games_missed_out": len(missed),
             "games_cur": sum(1 for r, _ in pairs if r["season"] == current_season),
             "games_prev": sum(1 for r, _ in pairs if r["season"] < current_season),
             "cur_share": sum(w for r, w in pairs if r["season"] == current_season) / gw,
@@ -616,8 +648,14 @@ def confidence(base: dict, dprof: dict) -> float:
     # season and recency discount that separates them, which is the whole
     # question a confidence meter is asking. ESS stays where it belongs, in
     # the shrinkage.
+    #
+    # Measured against the time he was AVAILABLE, not the whole calendar --
+    # `avail_weight` has his ruled-out weeks already taken out of it. A back
+    # who missed eight games with a foot injury and has started every game
+    # since is not a player we are unsure about.
     gw = max(base.get("weighted_games", 0.0), 0.0)
-    usage = min(gw / max(base.get("ref_weight", 1.0), 0.5), 1.0)
+    ref = base.get("avail_weight") or base.get("ref_weight", 1.0)
+    usage = min(gw / max(ref, 0.5), 1.0)
 
     played = float(base.get("games_cur", 0))
     current = 0.55 + 0.45 * min(played / CONF_SEEN_CURRENT, 1.0)
@@ -761,6 +799,10 @@ def drivers(base: dict, dprof: dict, script: dict, market: str,
     if base.get("eff_games", 0) < MIN_EFF_GAMES:
         out.append({"kind": "sample", "lean": 0,
                     "text": f"{base['eff_games']:.1f} effective games of usage"})
+    hurt = base.get("games_missed_out", 0)
+    if hurt >= 3:
+        out.append({"kind": "sample", "lean": 0,
+                    "text": f"missed {hurt} games hurt, not held against him"})
 
     # Rows only have room for the first two or three of these, so the ones
     # that actually moved the number have to come first. Volume leads because

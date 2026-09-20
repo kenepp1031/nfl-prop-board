@@ -91,6 +91,16 @@ many games we have on the defense. They multiply, so any one missing pulls the
 whole thing down. Rows sort affirmative reads first -- what a player is
 projected to do, ahead of what he is projected not to.
 
+**Time missed hurt is not held against a player.** Weeks he was listed out
+come off the *bottom* of that first fraction, so the question is how much of
+the time he was available we have seen him, not how much of the calendar. A
+back who missed half of last season with a foot injury and has started every
+game since is not a player we are unsure about. An injury history can forgive
+at most half the reference -- someone who was out all year and has played once
+is still someone we barely know. This changes the pip meter only: the
+projection is still made from the games he actually played, and the shrinkage
+still counts them honestly.
+
 Every coefficient sits at the top of `model.py` with a comment saying what it
 means. Nothing is fitted to past results.
 

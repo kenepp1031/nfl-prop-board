@@ -6,6 +6,7 @@ notes/DATA_SOURCES.md.
 """
 from __future__ import annotations
 
+import collections
 import csv
 import io
 
@@ -105,6 +106,41 @@ def schedule(season: int) -> list[dict]:
             "implied_away": total / 2 - spread / 2 if total else 0.0,
         })
     return out
+
+
+def out_weeks(years: list[int], current_year: int) -> dict[str, set[tuple]]:
+    """{player_id: {(season, week), ...}} -- the weeks a player was ruled off
+    the field.
+
+    A week a player was OUT is not a week we failed to learn something about
+    his role. He was not available to have one. The confidence meter takes
+    these weeks off the bottom of its fraction so a starter who missed half a
+    season hurt is not read as less known than the backup who replaced him.
+
+    Keyed on `gsis_id`, which is the same identifier the weekly stats call
+    `player_id`, so the join is exact -- no name matching anywhere in it.
+    A missing file is not fatal; it just means nobody gets excused.
+    """
+    gone: dict[str, set[tuple]] = collections.defaultdict(set)
+    for year in years:
+        hours = CURRENT_HOURS if year >= current_year else HISTORY_HOURS
+        try:
+            text = cached_fetch(f"injuries_{year}.csv",
+                                INJURY_URL.format(year=year), hours)
+        except Exception:
+            continue
+        for r in csv.DictReader(io.StringIO(text)):
+            if r.get("season_type") != "REG":
+                continue
+            # Doubtful counts with Out: a player listed doubtful who then has
+            # no stat line did not play, and the caller only excuses weeks he
+            # has no game log for anyway.
+            if (r.get("report_status") or "").strip().lower() not in ("out", "doubtful"):
+                continue
+            pid = (r.get("gsis_id") or "").strip()
+            if pid and r.get("week"):
+                gone[pid].add((int(r["season"]), int(r["week"])))
+    return dict(gone)
 
 
 def injuries(season: int) -> dict[tuple[str, str], str]:
