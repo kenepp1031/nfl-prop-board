@@ -8,7 +8,7 @@ import lines
 import model
 import render
 
-st.set_page_config(page_title="NFL prop board", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="NFL Props", page_icon="🏈", layout="wide")
 
 SEASON = 2026
 
