@@ -157,7 +157,7 @@ It is standard library plus Streamlit, so there is nothing to provision.
 
 1. Push the repo to GitHub.
 2. At [share.streamlit.io](https://share.streamlit.io), *Create app* -> from
-   your repo, branch `master`, main file `app.py`.
+   your repo, branch `main`, main file `app.py`.
 3. Nothing goes in Secrets. There are no accounts and no keys of ours.
 
 `cache/` is gitignored and rebuilds itself on first run; on a host it is
