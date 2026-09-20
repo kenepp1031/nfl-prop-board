@@ -1,0 +1,55 @@
+[theme]
+# Dark, hard-edged and loud. Only [theme] is defined (no light/dark pair), so
+# the board stays in this one look rather than following the OS.
+base = "dark"
+
+backgroundColor = "#08080A"
+secondaryBackgroundColor = "#131318"
+textColor = "#EDEDED"
+
+# Primary carries white button text, so it has to be dark enough to read on.
+# The acid green lives in the accent palette instead, where nothing sits
+# white text on top of it.
+primaryColor = "#D5006D"
+linkColor = "#C6FF00"
+linkUnderline = false
+
+borderColor = "#2A2A33"
+showWidgetBorder = true
+showSidebarBorder = true
+
+codeTextColor = "#C6FF00"
+codeBackgroundColor = "#101014"
+dataframeBorderColor = "#2A2A33"
+dataframeHeaderBackgroundColor = "#131318"
+
+# Semantic palette - green is the edge colour, red is the fade colour.
+greenColor = "#C6FF00"
+redColor = "#FF3B6B"
+orangeColor = "#FF8A00"
+yellowColor = "#FFD400"
+blueColor = "#00E5FF"
+violetColor = "#B388FF"
+grayColor = "#6E6E7A"
+
+chartCategoricalColors = ["#C6FF00", "#FF3B6B", "#00E5FF", "#B388FF", "#FF8A00", "#FFD400", "#6E6E7A"]
+
+# Condensed slab for headings, a squarish grotesque for body, mono for every
+# number on the board so lines and projections stack up column-wise.
+headingFont = "Anton:https://fonts.googleapis.com/css2?family=Anton&display=swap"
+font = "'Space Grotesk':https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+codeFont = "'Space Mono':https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap"
+
+baseFontSize = 15
+headingFontSizes = ["44px", "26px", "19px", "16px", "14px", "12px"]
+headingFontWeights = [400, 400, 400, 700, 700, 700]
+
+# No rounded corners anywhere. Everything is a hard rectangle.
+baseRadius = "none"
+buttonRadius = "none"
+
+[theme.sidebar]
+backgroundColor = "#0C0C10"
+secondaryBackgroundColor = "#16161C"
+borderColor = "#2A2A33"
+primaryColor = "#D5006D"

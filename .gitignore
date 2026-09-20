@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+
+# nflverse downloads and scraped pages; all regenerate on first run
+cache/
+
+.streamlit/secrets.toml
