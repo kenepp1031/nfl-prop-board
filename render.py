@@ -9,6 +9,7 @@ never the headline.
 """
 from __future__ import annotations
 
+import datetime as dt
 import html
 
 import model
@@ -34,6 +35,33 @@ def american(odds) -> str:
     if odds is None:
         return "--"
     return f"+{odds:.0f}" if odds > 0 else f"{odds:.0f}"
+
+
+def kickoff(game: dict) -> str:
+    """"Thursday 8:15 PM" -- the slot the game actually comes on in.
+
+    nfldata stores gameday as YYYY-MM-DD and gametime as 24h Eastern, which
+    is how everyone talks about the slate anyway ("the 1 o'clock games").
+    A game with no posted time sorts last and says so.
+    """
+    day, clock = game.get("gameday", ""), game.get("gametime", "")
+    try:
+        d = dt.date.fromisoformat(day)
+    except ValueError:
+        return "Kickoff TBD"
+    name = d.strftime("%A")
+    try:
+        h, m = (int(x) for x in clock.split(":")[:2])
+    except ValueError:
+        return f"{name}, time TBD"
+    suffix = "AM" if h < 12 else "PM"
+    return f"{name} {(h - 1) % 12 + 1}:{m:02d} {suffix}"
+
+
+def slot_key(game: dict) -> tuple:
+    """What makes two games the same kickoff window. Sorting on this puts
+    Thursday first, then the 1 o'clock block, the 4 o'clocks, and so on."""
+    return (game.get("gameday", "9999-99-99"), game.get("gametime", "99:99"))
 
 
 # the scale itself lives in model.py, next to what produces it
@@ -71,10 +99,41 @@ STYLE = """
               text-transform:uppercase; color:var(--hot); }
 .np-sect .d { font-size:11.5px; color:var(--dim); letter-spacing:.4px; }
 
+/* ---- kickoff window ------------------------------------------------ */
+.np-slot { display:flex; align-items:center; gap:12px; margin:26px 0 12px; }
+.np-slot .w { font-family:Anton,Impact,sans-serif; font-size:17px; letter-spacing:1.4px;
+              text-transform:uppercase; color:var(--acid); white-space:nowrap; }
+.np-slot .n { font-family:'Space Mono',monospace; font-size:10px; color:var(--dim);
+              letter-spacing:1.2px; text-transform:uppercase; white-space:nowrap; }
+.np-slot .r { flex:1; height:1px; background:var(--rule); }
+
 /* ---- one game ------------------------------------------------------ */
-.np-game { border:1px solid var(--rule); background:var(--panel); margin-bottom:26px; }
-.np-bar  { display:flex; align-items:stretch; background:var(--panel-2);
-           border-bottom:1px solid var(--rule); flex-wrap:wrap; }
+/* A <details> so a game opens and closes with no rerun -- clicking a
+   header must not cost a round trip through Streamlit. */
+.np-game { border:1px solid var(--rule); background:var(--panel); margin-bottom:10px; }
+.np-game > summary { cursor:pointer; list-style:none; display:block; }
+.np-game > summary::-webkit-details-marker { display:none; }
+.np-game > summary::marker { content:""; }
+.np-game[open] > .np-bar, .np-game[open] > summary > .np-bar {
+  border-bottom:1px solid var(--rule); }
+.np-game > summary:hover .np-abbr { color:var(--acid); }
+.np-bar  { display:flex; align-items:stretch; background:var(--panel-2); flex-wrap:wrap; }
+
+/* right end of the header: the headline read, so a closed game still says
+   something, plus the count and the caret */
+.np-tail { display:flex; align-items:center; gap:14px; padding:13px 18px;
+           border-left:1px solid var(--rule); margin-left:auto;
+           min-width:0; max-width:300px; }
+.np-tail .c { font-family:'Space Mono',monospace; font-size:10px; color:var(--dim);
+              letter-spacing:1.3px; text-transform:uppercase; text-align:right;
+              min-width:0; }
+.np-tail .c b { color:var(--text); font-weight:700; }
+.np-lead { font-family:'Space Grotesk',system-ui,sans-serif; font-size:12px;
+           letter-spacing:0; text-transform:none; color:var(--text); font-weight:700;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.np-lead em { font-style:normal; color:var(--cyan); }
+.np-caret { font-size:13px; color:var(--acid); transition:transform .12s ease; }
+.np-game[open] .np-caret { transform:rotate(90deg); }
 .np-side { display:flex; align-items:center; gap:11px; padding:13px 17px; min-width:250px; flex:1; }
 .np-side img { height:40px; width:40px; object-fit:contain; }
 .np-abbr { font-family:Anton,Impact,sans-serif; font-size:25px; letter-spacing:1px; }
@@ -164,6 +223,8 @@ STYLE = """
 .np-game-of b { color:var(--text); font-weight:700; }
 
 @media (max-width: 1000px) {
+  .np-lead { display:none; }
+  .np-tail { border-left:none; padding:6px 18px 13px; }
   .np-row { grid-template-columns:38px 1fr 92px 84px; }
   .np-mkt, .np-why, .np-conf { display:none; }
   .np-sc  { grid-template-columns:34px 38px 1fr 88px 80px; }
@@ -226,7 +287,22 @@ def _side(abbr: str, implied: float, read: str, home: bool) -> str:
     )
 
 
-def game_panel(game: dict, props: list[dict], away_read: str, home_read: str) -> str:
+def slot_header(label: str, n_games: int) -> str:
+    """The rule that separates one kickoff window from the next."""
+    return (f'<div class="np-slot"><div class="w">{esc(label)}</div>'
+            f'<div class="n">{n_games} game{"" if n_games == 1 else "s"}</div>'
+            f'<div class="r"></div></div>')
+
+
+def game_panel(game: dict, props: list[dict], away_read: str, home_read: str,
+               expanded: bool = False) -> str:
+    """One game, closed by default.
+
+    The header is a <summary>, so the whole matchup bar is the click target
+    and the browser handles opening it. Streamlit's own expander would work
+    too, but it cannot hold this markup as its label and every click would
+    rerun the script.
+    """
     spread = game["spread"]
     fav = f'{game["home"]} -{spread:g}' if spread > 0 else f'{game["away"]} -{abs(spread):g}'
     if spread == 0:
@@ -234,18 +310,39 @@ def game_panel(game: dict, props: list[dict], away_read: str, home_read: str) ->
 
     rows = "".join(_prop_row(p) for p in props) or (
         '<div class="np-empty">No props clear the filters for this game.</div>')
+    live = sum(1 for p in props if p["playable"])
 
     return (
-        '<div class="np-game">'
-        '<div class="np-bar">'
+        f'<details class="np-game"{" open" if expanded else ""}>'
+        '<summary><div class="np-bar">'
         + _side(game["away"], game["implied_away"], away_read, home=False)
         + f'<div class="np-mid"><div class="k">{game["total"]:g}</div>'
           f'<div class="v">total</div>'
           f'<div class="k" style="margin-top:6px">{esc(fav)}</div>'
           f'<div class="v">spread</div></div>'
         + _side(game["home"], game["implied_home"], home_read, home=True)
-        + '</div>' + rows + '</div>'
+        + f'<div class="np-tail"><div class="c">{_headline(props)}'
+          f'<b>{live}</b> read{"" if live == 1 else "s"}</div>'
+          f'<div class="np-caret">&#9654;</div></div>'
+        + '</div></summary>' + rows + '</details>'
     )
+
+
+def _headline(props: list[dict]) -> str:
+    """The one read a closed game leads with. Props arrive already sorted --
+    playable first, affirmative first, strongest first -- so it is the top
+    of that list, and it is our number, never the book's."""
+    lead = next((p for p in props if p["playable"] and p["side"] == "OVER"), None)
+    if lead is None:
+        return ""
+    if lead["market"] == "anytime_td":
+        what = f'{lead["our_prob"] * 100:.0f}% to score'
+    elif lead["market"] in ("pass_tds", "interceptions"):
+        what = f'{lead["projection"]:.2f} {lead["market_label"].lower()}'
+    else:
+        what = f'{lead["projection"]:.0f} {lead["market_label"].lower()}'
+    return (f'<div class="np-lead">{esc(lead["player"])} '
+            f'<em>{esc(what)}</em></div>')
 
 
 def _our_cell(p: dict) -> str:

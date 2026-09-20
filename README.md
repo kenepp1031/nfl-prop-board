@@ -20,7 +20,11 @@ python -m streamlit run app.py --server.port 8502
 |---|---|
 | **Who scores** | everyone on the slate ranked by our probability he reaches the end zone |
 | **Top projections** | one market, ranked by our projection, biggest first |
-| **By game** | the full matchup board, grouped by game |
+| **By game** | the full matchup board, in kickoff order -- Thursday, the 1 o'clock block, the 4 o'clocks, Sunday night, Monday |
+
+Games on the **By game** board start closed, each header showing its headline
+read; click the matchup bar to drop its props down. "Open every game" in the
+sidebar opens them all at once.
 
 Every row carries the two or three things that actually moved the number --
 his volume, what the defense gives up in the units it was measured in, and

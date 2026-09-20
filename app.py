@@ -1,3 +1,4 @@
+import collections
 import datetime as dt
 
 import streamlit as st
@@ -80,6 +81,13 @@ with st.sidebar:
         "Show set-aside props", value=False,
         help="Props where the line implies a role our game logs cannot see, "
              "or the player is listed out. Shown greyed, never ranked.")
+    if view == "By game":
+        open_all = st.toggle(
+            "Open every game", value=False,
+            help="Off, the games are collapsed to their headers and you click "
+                 "one to see its reads.")
+    else:
+        open_all = False
 
     st.divider()
     st.caption(
@@ -107,10 +115,10 @@ for game in data["games"]:
         shown += sum(1 for p in props if p["playable"])
         kept_games.append((game, props))
 
-# games with the strongest affirmative read first
-kept_games.sort(key=lambda gp: -max((p["conviction"] for p in gp[1]
-                                     if p["playable"] and p["side"] == "OVER"),
-                                    default=-1))
+# Kickoff order: Thursday, the 1 o'clock block, the 4 o'clocks, Sunday night,
+# Monday. It used to lead with the strongest read, which meant the game you
+# were about to watch could be buried halfway down the page.
+kept_games.sort(key=lambda gp: render.slot_key(gp[0]))
 
 with header_slot:
     st.html(render.header(SEASON, week, book, shown))
@@ -139,12 +147,22 @@ with body_slot:
         if not kept_games:
             st.info("Nothing clears that read. Drop the threshold, or the books "
                     "may not have posted this week's numbers yet.")
+        # One block, not one per game: Streamlit puts a gap between elements,
+        # and with the games collapsed those gaps are most of the page.
+        slots = collections.Counter(render.kickoff(g) for g, _ in kept_games)
+        parts, current = [], None
         for game, props in kept_games:
-            st.html(render.game_panel(
+            slot = render.kickoff(game)
+            if slot != current:
+                parts.append(render.slot_header(slot, slots[slot]))
+                current = slot
+            parts.append(render.game_panel(
                 game, props,
                 model.funnel_label(game["def_away"]),
                 model.funnel_label(game["def_home"]),
+                expanded=open_all,
             ))
+        st.html("".join(parts))
 
     with st.expander("How the number is built"):
         st.markdown(f"""
