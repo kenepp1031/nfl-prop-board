@@ -112,17 +112,39 @@ def _safe(num: float, den: float, default: float = 0.0) -> float:
 # --------------------------------------------------------------------------
 # weighting
 # --------------------------------------------------------------------------
-def game_weights(rows: list[dict], current_season: int) -> list[float]:
-    """A weight per row, from the season it belongs to and how many GAMES back
-    it is. The decay has to be per game, not per row: a defense contributes
-    ~25 opposing player-rows per game, so decaying by row index would put
-    0.94^500 on last season and throw the whole sample away."""
+def timeline(weeks: list[dict]) -> list[tuple]:
+    """Every (season, week) the data covers, oldest first. This is the
+    calendar the decay is measured against."""
+    return sorted({(r["season"], r["week"]) for r in weeks})
+
+
+def game_weights(rows: list[dict], current_season: int,
+                 calendar: list[tuple] | None = None) -> list[float]:
+    """A weight per row, from the season it belongs to and how many weeks
+    back it is.
+
+    Two things this has to get right, both of which were wrong once:
+
+    The decay is per GAME, not per row. A defense contributes ~25 opposing
+    player-rows per game, so decaying by row index would put 0.88^500 on last
+    season and throw the whole sample away.
+
+    The decay is measured against the CALENDAR, not against the player's own
+    last appearance. Without `calendar` a player who has not taken a snap
+    since last season has his final 2025 game treated as the most recent
+    game there is, so his weights come out flat and his effective sample
+    comes out LARGER than an active starter's -- which is backwards, and it
+    fed straight into the confidence meter.
+    """
     games = sorted({(r["season"], r["week"]) for r in rows})
-    n = len(games)
+    cal = calendar or games
+    last = len(cal) - 1
+    pos = {g: i for i, g in enumerate(cal)}
     by_game = {}
-    for i, g in enumerate(games):
+    for g in games:
         season_w = SEASON_WEIGHT.get(current_season - g[0], 0.0)
-        by_game[g] = season_w * (GAME_DECAY ** (n - 1 - i))
+        back = last - pos.get(g, last)
+        by_game[g] = season_w * (GAME_DECAY ** back)
     return [by_game[(r["season"], r["week"])] for r in rows]
 
 
@@ -137,6 +159,7 @@ def defense_profiles(weeks: list[dict], current_season: int) -> dict[str, dict]:
     yards allowed per game is mostly a function of how often a defense is on
     the field, which is the opponent's doing, not theirs.
     """
+    cal = timeline(weeks)
     by_def: dict[str, list[dict]] = collections.defaultdict(list)
     for r in weeks:
         if r["opponent"]:
@@ -145,7 +168,7 @@ def defense_profiles(weeks: list[dict], current_season: int) -> dict[str, dict]:
     acc: dict[str, dict] = {}
     for d, rows in by_def.items():
         rows.sort(key=lambda r: (r["season"], r["week"]))
-        weights = game_weights(rows, current_season)
+        weights = game_weights(rows, current_season, cal)
         a: dict[str, float] = collections.defaultdict(float)
         games: set[tuple] = set()
         for r, w in zip(rows, weights):
@@ -188,6 +211,10 @@ def defense_profiles(weeks: list[dict], current_season: int) -> dict[str, dict]:
             "games": int(a["games"]),
             "ypa_allowed": ypa,
             "ypc_allowed": ypc,
+            # league averages travel with the profile so a row can say "5.0 a
+            # carry against a league 4.3" instead of a bare multiplier
+            "lg_ypa": lg_ypa,
+            "lg_ypc": lg_ypc,
             "pass_yds_pg": a["pass_yds"] / games,
             "rush_yds_pg": a["rush_yds"] / games,
             "pass": _clamp(_shrink(_safe(ypa, lg_ypa, 1.0), a["att"], K_PASS_PLAYS), *DEF_MULT_CLAMP),
@@ -201,6 +228,8 @@ def defense_profiles(weeks: list[dict], current_season: int) -> dict[str, dict]:
         }
         for pg in ("RB", "WR", "TE"):
             ypt = _safe(a["rec_yds_" + pg], a["tgt_" + pg])
+            prof["ypt_allowed_" + pg] = ypt
+            prof["lg_ypt_" + pg] = lg_pos[pg]
             prof["vs_" + pg] = _clamp(
                 _shrink(_safe(ypt, lg_pos[pg], 1.0), a["tgt_" + pg], K_PASS_PLAYS / 2),
                 *DEF_MULT_CLAMP)
@@ -235,16 +264,43 @@ _STAT_KEYS = (
 )
 
 
+def full_time_reference(weeks: list[dict], current_season: int) -> tuple[float, float]:
+    """(total weight, effective sample) a player would carry if he had played
+    every game in the window.
+
+    A raw weight sum means nothing on its own -- the decay caps it around 8
+    however long a career is -- so "how much have we got on this guy" only
+    reads as a fraction of this.
+
+    A full-time player still misses his bye, so the reference skips one week
+    per season. Otherwise the top of the scale is unreachable by
+    construction and every starter piles into the same bucket.
+    """
+    cal = timeline(weeks)
+    if not cal:
+        return 1.0, 1.0
+    byes = {min(w for s, w in cal if s == season) for season in {s for s, _ in cal}}
+    fake = [{"season": s, "week": w} for s, w in cal
+            if not (w in byes and (s, w) != cal[-1])]
+    ws = [w for w in game_weights(fake, current_season, cal) if w > 0]
+    if not ws:
+        return 1.0, 1.0
+    total = sum(ws)
+    return total, (total ** 2) / sum(w * w for w in ws)
+
+
 def player_baselines(weeks: list[dict], current_season: int) -> dict[str, dict]:
     """Recency-weighted per-game volume, efficiency and game-to-game spread."""
     by_player: dict[str, list[dict]] = collections.defaultdict(list)
     for r in weeks:
         by_player[r["player_id"]].append(r)
 
+    cal = timeline(weeks)
+    ref_weight, ref_ess = full_time_reference(weeks, current_season)
     out: dict[str, dict] = {}
     for pid, rows in by_player.items():
         rows.sort(key=lambda r: (r["season"], r["week"]))
-        weights = game_weights(rows, current_season)
+        weights = game_weights(rows, current_season, cal)
         pairs = [(r, w) for r, w in zip(rows, weights) if w > 0]
         if not pairs:
             continue
@@ -278,6 +334,8 @@ def player_baselines(weeks: list[dict], current_season: int) -> dict[str, dict]:
             "headshot": next((r["headshot"] for r, _ in reversed(pairs) if r["headshot"]), ""),
             "weighted_games": gw,
             "eff_games": eff_games,
+            "ref_ess": ref_ess,
+            "ref_weight": ref_weight,
             "games_cur": sum(1 for r, _ in pairs if r["season"] == current_season),
             "games_prev": sum(1 for r, _ in pairs if r["season"] < current_season),
             "cur_share": sum(w for r, w in pairs if r["season"] == current_season) / gw,
@@ -348,12 +406,33 @@ def _shrink_to_position(baselines: dict[str, dict]) -> None:
         for rate, pairs in rates.items():
             group_mean[pg][rate] = weighted_mean(pairs)
 
+    # Volume is never shrunk, but the board still needs a yardstick for it:
+    # "18 carries a game" only means something against what the position
+    # typically gets. Only players who actually do the thing count, or the
+    # third-string backs drag every average to nothing.
+    vol_pool: dict[str, dict[str, list]] = collections.defaultdict(
+        lambda: collections.defaultdict(list))
+    for b in baselines.values():
+        if b["eff_games"] < 4:
+            continue
+        pg = b["position_group"] or b["position"] or "UNK"
+        for field in ("att", "car", "tgt"):
+            if b[field] > 0.5:
+                vol_pool[pg][field].append(b[field])
+    group_volume: dict[str, dict[str, float]] = collections.defaultdict(dict)
+    for pg, fields in vol_pool.items():
+        for field, vals in fields.items():
+            group_volume[pg][field] = sum(vals) / len(vals)
+
     for b in baselines.values():
         pg = b["position_group"] or b["position"] or "UNK"
         means = group_mean.get(pg, {})
         n = b["eff_games"]
         w = n / (n + K_PLAYER_GAMES)
         b["rate_confidence"] = w
+        # kept so a row can say "5.1 a carry, his group averages 4.3"
+        b["pos_mean"] = dict(means)
+        b["pos_vol"] = dict(group_volume.get(pg, {}))
         all_rates = {**_EFFICIENCY_RATES, **_TOUCH_RATES}
         for rate, volume_field in all_rates.items():
             if rate not in means:
@@ -497,3 +576,280 @@ def cover_probability(market: str, projection: float, line: float,
     if sd <= 0:
         return 0.5
     return 1.0 - phi((line - projection) / sd)
+
+
+# --------------------------------------------------------------------------
+# how strongly do we hold the call, and why
+#
+# Nothing below looks at the book. The board ranks on our own read; the
+# price is printed beside it as a reference, not as the thing being ranked.
+# --------------------------------------------------------------------------
+CONF_SEEN_CURRENT = 2.0   # games this season before we stop docking him
+CONF_DEF_GAMES = 8.0      # opponent games past which the defense read is fully fed
+
+# Plain words for the 0-1 confidence scale, high to low. These describe the
+# scale, not this week's board -- they are not tuned to make the buckets come
+# out any particular size.
+CONF_WORDS = [(0.80, "strong read"), (0.58, "fair read"),
+              (0.33, "light read"), (0.0, "thin read")]
+
+
+def confidence(base: dict, dprof: dict) -> float:
+    """0-1: how much of this read is actually earned.
+
+    Three things have to be true before we hold an opinion -- we have seen
+    the player enough, we have seen him play THIS season (roles change in
+    March), and we have seen the defense enough. Any one missing should pull
+    the whole thing down, so they multiply rather than average.
+
+    Each term is measured against what a FULLY fed read looks like, not
+    against infinity. Two earlier versions of this both collapsed to a single
+    label across the whole board: one scaled usage by n/(n+K), whose ceiling
+    the decayed ESS can never reach, and one counted the share of the
+    weighting coming from this season, which in September is small for
+    everybody for the same calendar reason and so separated nobody.
+    """
+    # Total weight, NOT the effective sample size. ESS is scale-invariant,
+    # so it cannot tell "two recent games and a faded history" from "eighteen
+    # evenly faded games and nothing since" -- it actually scores the retired
+    # player HIGHER, because his weights are flatter. Total weight carries the
+    # season and recency discount that separates them, which is the whole
+    # question a confidence meter is asking. ESS stays where it belongs, in
+    # the shrinkage.
+    gw = max(base.get("weighted_games", 0.0), 0.0)
+    usage = min(gw / max(base.get("ref_weight", 1.0), 0.5), 1.0)
+
+    played = float(base.get("games_cur", 0))
+    current = 0.55 + 0.45 * min(played / CONF_SEEN_CURRENT, 1.0)
+
+    dg = float(dprof.get("games", 0))
+    defense = min(dg / CONF_DEF_GAMES, 1.0)
+
+    return _clamp(usage * current * defense, 0.0, 1.0)
+
+
+def confidence_word(c: float) -> str:
+    for floor, word in CONF_WORDS:
+        if c >= floor:
+            return word
+    return CONF_WORDS[-1][1]
+
+
+def conviction(market: str, our_prob: float, conf: float) -> float:
+    """0-1 ranking score, from our number alone.
+
+    Anytime touchdown asks a question with a natural answer -- how likely is
+    he to score -- so that probability IS the ranking. Every other market is
+    a line to clear, where 50/50 means we have nothing to say and both 90%
+    and 10% are strong opinions. Either way it is scaled by how much of the
+    read we have earned, so a loud number off two games does not outrank a
+    quieter one off twenty.
+    """
+    strength = our_prob if market == "anytime_td" else abs(our_prob - 0.5) * 2
+    return _clamp(strength, 0.0, 1.0) * conf
+
+
+_VOLUME_PHRASE = {
+    "pass_yds": ("att", "pass attempt", "pass attempts"),
+    "pass_tds": ("att", "pass attempt", "pass attempts"),
+    "interceptions": ("att", "pass attempt", "pass attempts"),
+    "rush_yds": ("car", "carry", "carries"),
+    "rec_yds": ("tgt", "target", "targets"),
+}
+
+
+def _count(n: float, singular: str, plural: str | None = None) -> str:
+    """"1 target", "13 targets" -- a row that says "1 targets" reads like a
+    bug even when the number behind it is right."""
+    word = singular if round(n) == 1 else (plural or singular + "s")
+    return f"{n:.0f} {word}"
+
+
+_SCRIPT_YARDAGE = ("pass_yds", "rush_yds", "rec_yds", "rush_rec_yds", "interceptions")
+
+
+def drivers(base: dict, dprof: dict, script: dict, market: str,
+            proj_all: dict, opponent: str) -> list[dict]:
+    """The reasons behind one projection, biggest first.
+
+    Each entry is {kind, text, lean}, where lean is +1 if that factor pushes
+    the number up, -1 down, 0 for context. This is the point of the board --
+    a number is only worth as much as the sentence next to it.
+    """
+    out: list[dict] = []
+    vol = proj_all["_volume"]
+    pg = base.get("position_group") or base.get("position") or ""
+    pos_vol = base.get("pos_vol") or {}
+
+    def vol_lean(*fields: str) -> int:
+        """Volume is usually the biggest term in the projection, so when it
+        is what makes a player interesting the row has to say so.
+
+        Judged on the touch a player actually gets. A receiver with no
+        carries is not a low-volume runner, he is not a runner, and marking
+        that as a negative reads like the model docked him for it.
+        """
+        best, lean = 0.0, 0
+        for field in fields:
+            amount, typical = vol[field], pos_vol.get(field)
+            if amount < 0.5 or not typical or amount <= best:
+                continue
+            ratio = amount / typical
+            best = amount
+            lean = 0 if abs(ratio - 1) < 0.15 else (1 if ratio > 1 else -1)
+        return lean
+
+    # --- volume: the biggest term in every projection ----------------------
+    if market == "rush_rec_yds":
+        touches = vol["car"] + vol["tgt"]
+        out.append({"kind": "volume", "lean": vol_lean("car", "tgt"),
+                    "text": f"{_count(vol['car'], 'carry', 'carries')} and "
+                            f"{_count(vol['tgt'], 'target')} a game"})
+    elif market == "anytime_td":
+        touches = vol["car"] + vol["tgt"]
+        out.append({"kind": "volume", "lean": vol_lean("car", "tgt"),
+                    "text": f"{touches:.0f} touches a game "
+                            f"({_count(vol['car'], 'carry', 'carries')}, "
+                            f"{_count(vol['tgt'], 'target')})"})
+    else:
+        key, singular, plural = _VOLUME_PHRASE[market]
+        out.append({"kind": "volume", "lean": vol_lean(key),
+                    "text": f"{_count(vol[key], singular, plural)} a game"})
+
+    # --- the matchup -------------------------------------------------------
+    out.extend(_matchup_driver(dprof, market, pg, opponent))
+
+    # --- game script -------------------------------------------------------
+    # The dropback/carry story only belongs on the yardage markets. A
+    # touchdown prop does not care that a favourite throws less -- it cares
+    # that his team is expected in the end zone more often -- so for the
+    # scoring markets the environment is the implied total, full stop.
+    margin = script["margin"]
+    if market in _SCRIPT_YARDAGE:
+        if margin >= 3:
+            ground = market in ("rush_yds", "rush_rec_yds")
+            out.append({"kind": "script", "lean": 1 if ground else -1,
+                        "text": f"{margin:.0f}-point favourite, " + (
+                            "running it out late" if ground
+                            else "fewer dropbacks with a lead")})
+        elif margin <= -3:
+            ground = market == "rush_yds"
+            out.append({"kind": "script", "lean": -1 if ground else 1,
+                        "text": f"{abs(margin):.0f}-point dog, " + (
+                            "the script takes carries away" if ground
+                            else "throwing to catch up")})
+    elif market in ("anytime_td", "pass_tds"):
+        s = script["scoring"]
+        if abs(s - 1) >= 0.05:
+            word = "high" if s > 1 else "quiet"
+            out.append({"kind": "script", "lean": 1 if s > 1 else -1,
+                        "text": f"{script['implied']:.0f} implied points, "
+                                f"a {word}-scoring spot"})
+        else:
+            out.append({"kind": "script", "lean": 0,
+                        "text": f"{script['implied']:.0f} implied points, "
+                                f"an average scoring spot"})
+
+    # --- his own efficiency against his position ---------------------------
+    out.extend(_efficiency_driver(base, market))
+
+    # --- what we do not know ----------------------------------------------
+    share = base.get("cur_share", 0.0)
+    if share < 0.35:
+        out.append({"kind": "sample", "lean": 0,
+                    "text": f"only {share * 100:.0f}% of this read is from this season"})
+    if base.get("eff_games", 0) < MIN_EFF_GAMES:
+        out.append({"kind": "sample", "lean": 0,
+                    "text": f"{base['eff_games']:.1f} effective games of usage"})
+
+    # Rows only have room for the first two or three of these, so the ones
+    # that actually moved the number have to come first. Volume leads because
+    # it is the biggest term; caveats trail because they qualify the rest.
+    order = {"volume": 0, "matchup": 1, "script": 1, "efficiency": 1, "sample": 3}
+    return sorted(out, key=lambda d: (order[d["kind"]], 0 if d["lean"] else 1))
+
+
+def _matchup_driver(dprof: dict, market: str, pg: str, opp: str) -> list[dict]:
+    """The defense half of the projection, in the units it was measured in."""
+    def pct(mult: float) -> str:
+        return f"{abs(mult - 1) * 100:.0f}% {'above' if mult > 1 else 'below'} average"
+
+    def lean(mult: float) -> int:
+        return 0 if abs(mult - 1) < 0.03 else (1 if mult > 1 else -1)
+
+    if market == "pass_yds":
+        m = dprof.get("pass", 1.0)
+        return [{"kind": "matchup", "lean": lean(m),
+                 "text": f"{opp} allow {dprof.get('ypa_allowed', 0):.1f} yards a pass attempt "
+                         f"(league {dprof.get('lg_ypa', 0):.1f}), {pct(m)}"}]
+    if market == "rush_yds":
+        m = dprof.get("rush", 1.0)
+        return [{"kind": "matchup", "lean": lean(m),
+                 "text": f"{opp} allow {dprof.get('ypc_allowed', 0):.1f} yards a carry "
+                         f"(league {dprof.get('lg_ypc', 0):.1f}), {pct(m)}"}]
+    if market == "rec_yds":
+        m = dprof.get("vs_" + pg, dprof.get("pass", 1.0))
+        got = dprof.get("ypt_allowed_" + pg)
+        if got is None:
+            return [{"kind": "matchup", "lean": lean(m),
+                     "text": f"{opp} secondary {pct(m)}"}]
+        return [{"kind": "matchup", "lean": lean(m),
+                 "text": f"{opp} allow {got:.1f} yards a target to {pg}s "
+                         f"(league {dprof.get('lg_ypt_' + pg, 0):.1f}), {pct(m)}"}]
+    if market == "rush_rec_yds":
+        r = dprof.get("rush", 1.0)
+        p = dprof.get("vs_" + pg, dprof.get("pass", 1.0))
+        return [{"kind": "matchup", "lean": lean((r + p) / 2),
+                 "text": f"{opp} allow {dprof.get('ypc_allowed', 0):.1f} a carry and "
+                         f"{dprof.get('ypt_allowed_' + pg, 0):.1f} a target to {pg}s"}]
+    if market == "pass_tds":
+        m = dprof.get("pass_td", 1.0)
+        return [{"kind": "matchup", "lean": lean(m),
+                 "text": f"{opp} concede passing touchdowns {pct(m)}"}]
+    if market == "interceptions":
+        m = dprof.get("int", 1.0)
+        return [{"kind": "matchup", "lean": lean(m),
+                 "text": f"{opp} pick passes off at a rate {pct(m)}"}]
+
+    # anytime touchdown draws on both
+    r, p = dprof.get("rush_td", 1.0), dprof.get("pass_td", 1.0)
+    bits = []
+    if abs(r - 1) >= 0.03:
+        bits.append(f"rushing touchdowns {pct(r)}")
+    if abs(p - 1) >= 0.03:
+        bits.append(f"receiving touchdowns {pct(p)}")
+    if not bits:
+        return [{"kind": "matchup", "lean": 0,
+                 "text": f"{opp} concede touchdowns at about the league rate"}]
+    return [{"kind": "matchup", "lean": 1 if (r + p) / 2 > 1 else -1,
+             "text": f"{opp} concede " + " and ".join(bits)}]
+
+
+_EFFICIENCY_LABEL = {
+    "pass_yds": ("ypa", "yards a pass attempt", ""),
+    "rush_yds": ("ypc", "yards a carry", ""),
+    "rush_rec_yds": ("ypc", "yards a carry", ""),
+    "rec_yds": ("ypt", "yards a target", ""),
+    "interceptions": ("int_rate", "interception rate", "%"),
+    "pass_tds": ("pass_td_rate", "touchdown rate", "%"),
+}
+
+
+def _efficiency_driver(base: dict, market: str) -> list[dict]:
+    """Only worth saying when he is actually different from his position."""
+    rate, label, unit = _EFFICIENCY_LABEL.get(market, (None, "", ""))
+    if not rate:
+        return []
+    mine = base.get(rate, 0.0)
+    theirs = (base.get("pos_mean") or {}).get(rate)
+    if not theirs or not mine:
+        return []
+    ratio = mine / theirs
+    if abs(ratio - 1) < 0.08:
+        return []
+    if unit == "%":
+        text = (f"his {label} is {mine * 100:.1f}% against a position "
+                f"average {theirs * 100:.1f}%")
+    else:
+        text = f"he gets {mine:.1f} {label}, his position averages {theirs:.1f}"
+    return [{"kind": "efficiency", "lean": 1 if ratio > 1 else -1, "text": text}]

@@ -1,14 +1,30 @@
 # NFL prop board
 
-Our projection against the market line, for seven prop markets, grouped by
-game. Built around one question: **what does this defense give up, and does it
-give up runs or passes?**
+Who we think scores, who runs for how much, who catches how much -- and the
+reason for each. Seven prop markets. Built around one question: **what does
+this defense give up, and does it give up runs or passes?**
+
+**The book does not get a vote.** Rows are ranked on our own number. The line
+and the price sit beside it, small and grey, so you can see the two together;
+they never pick a side and never change the order.
 
 Double-click `Start NFL Props.cmd`, or:
 
 ```
 python -m streamlit run app.py --server.port 8502
 ```
+
+## Three views
+
+| | |
+|---|---|
+| **Who scores** | everyone on the slate ranked by our probability he reaches the end zone |
+| **Top projections** | one market, ranked by our projection, biggest first |
+| **By game** | the full matchup board, grouped by game |
+
+Every row carries the two or three things that actually moved the number --
+his volume, what the defense gives up in the units it was measured in, and
+the game script -- with an arrow for which way each one pushed.
 
 ## Markets
 
@@ -61,10 +77,15 @@ funnel read on each game header:
 Favourites run more and throw less; the scoring environment scales touchdown
 and interception rates.
 
-Edge is our probability minus the book's with the vig removed, so a +900
-anytime touchdown and a -110 yardage line are directly comparable. Yardage
-uses a normal spread that includes how little we may know about a player;
-touchdowns and interceptions use Poisson.
+Yardage probabilities use a normal spread that includes how little we may
+know about a player; touchdowns and interceptions use Poisson.
+
+**Confidence** is the pip meter on the right, and it is about the read, not
+the bet: how much weighted history we have on the player against what a
+full-time player carries, whether he has actually played this season, and how
+many games we have on the defense. They multiply, so any one missing pulls the
+whole thing down. Rows sort affirmative reads first -- what a player is
+projected to do, ahead of what he is projected not to.
 
 Every coefficient sits at the top of `model.py` with a comment saying what it
 means. Nothing is fitted to past results.

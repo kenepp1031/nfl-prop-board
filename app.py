@@ -38,25 +38,44 @@ stats = load_stats(SEASON)
 schedule = stats["schedule"]
 weeks = sorted({g["week"] for g in schedule})
 
+VIEWS = ["Who scores", "Top projections", "By game"]
+
 with st.sidebar:
     st.subheader("Board")
+    view = st.radio("View", VIEWS, index=0,
+                    help="Who scores and Top projections rank the whole slate "
+                         "on our number. By game is the full matchup board.")
     week = st.selectbox("Week", weeks, index=weeks.index(current_week(schedule)))
     book = st.segmented_control("Book", ["DraftKings", "FanDuel"],
                                 default="DraftKings", key="book")
     book = book or "DraftKings"
+    st.caption("The book only sets which lines are shown beside our number. "
+               "It never picks a side or changes the order.")
 
     st.divider()
-    picked = st.pills(
-        "Markets",
-        list(lines.MARKET_LABELS),
-        format_func=lambda k: lines.MARKET_LABELS[k],
-        selection_mode="multi",
-        default=list(lines.MARKET_LABELS),
-    )
-    min_edge = st.slider("Minimum edge", 0.0, 25.0, 4.0, 0.5,
-                         format="%.1f%%",
-                         help="Our probability minus the book's, with the vig taken out.")
-    side = st.segmented_control("Side", ["Both", "Over", "Under"], default="Both")
+    if view == "Top projections":
+        ranked_market = st.selectbox(
+            "Market", [m for m in lines.MARKET_LABELS if m != "anytime_td"],
+            format_func=lambda k: lines.MARKET_LABELS[k])
+        picked = [ranked_market]
+    elif view == "Who scores":
+        picked = ["anytime_td"]
+    else:
+        picked = st.pills(
+            "Markets",
+            list(lines.MARKET_LABELS),
+            format_func=lambda k: lines.MARKET_LABELS[k],
+            selection_mode="multi",
+            default=list(lines.MARKET_LABELS),
+        )
+
+    min_conf = st.select_slider(
+        "Least I will look at",
+        options=[w for _, w in reversed(model.CONF_WORDS)],
+        value="fair read",
+        help="How much of the read is actually earned: how many games we have "
+             "on the player, how much of it is from this season, and how many "
+             "games we have on the defense.")
     show_flagged = st.toggle(
         "Show set-aside props", value=False,
         help="Props where the line implies a role our game logs cannot see, "
@@ -67,57 +86,88 @@ with st.sidebar:
         f"Defense reads blend {SEASON} with {SEASON - 1}, weighted toward "
         f"this season. Lines from BettingPros; stats from nflverse.")
 
+floor = dict((w, f) for f, w in model.CONF_WORDS)[min_conf]
+
 market_lines = load_lines(SEASON, week, lines.BOOKS[book])
 data = board.build(SEASON, week, book, stats, market_lines)
+
+
+def keep(p: dict) -> bool:
+    if not p["playable"]:
+        return show_flagged
+    return p["confidence"] >= floor
+
 
 # --- filter ----------------------------------------------------------------
 wanted = set(picked or lines.MARKET_LABELS)
 kept_games, shown = [], 0
 for game in data["games"]:
-    props = [p for p in game["props"] if p["market"] in wanted]
-    if side != "Both":
-        props = [p for p in props if p["side"] == side.upper()]
-    props = [p for p in props
-             if (p["playable"] and p["edge"] * 100 >= min_edge)
-             or (show_flagged and not p["playable"])]
+    props = [p for p in game["props"] if p["market"] in wanted and keep(p)]
     if props:
         shown += sum(1 for p in props if p["playable"])
         kept_games.append((game, props))
 
-kept_games.sort(key=lambda gp: -max((p["edge"] for p in gp[1] if p["playable"]), default=-1))
+# games with the strongest affirmative read first
+kept_games.sort(key=lambda gp: -max((p["conviction"] for p in gp[1]
+                                     if p["playable"] and p["side"] == "OVER"),
+                                    default=-1))
 
 with header_slot:
     st.html(render.header(SEASON, week, book, shown))
 
 with body_slot:
-    if not kept_games:
-        st.info("No props clear that edge. Lower the minimum, or the books "
-                "may not have posted this week's numbers yet.")
-    for game, props in kept_games:
-        st.html(render.game_panel(
-            game, props,
-            model.funnel_label(game["def_away"]),
-            model.funnel_label(game["def_home"]),
-        ))
+    if view == "Who scores":
+        rows = [p for _, props in kept_games for p in props
+                if p["playable"] and p["market"] == "anytime_td"]
+        rows.sort(key=lambda p: -p["our_prob"])
+        st.html(render.section(
+            "Most likely to score",
+            "Ranked by our probability that he reaches the end zone. "
+            "The book's price is the grey column."))
+        st.html(render.scorer_board(rows[:50]))
+
+    elif view == "Top projections":
+        label = lines.MARKET_LABELS[picked[0]]
+        rows = [p for _, props in kept_games for p in props if p["playable"]]
+        rows.sort(key=lambda p: -p["projection"])
+        st.html(render.section(
+            f"Most {label.lower()}",
+            "Ranked by our projection, biggest first, with the reason beside it."))
+        st.html(render.yardage_board(rows[:40]))
+
+    else:
+        if not kept_games:
+            st.info("Nothing clears that read. Drop the threshold, or the books "
+                    "may not have posted this week's numbers yet.")
+        for game, props in kept_games:
+            st.html(render.game_panel(
+                game, props,
+                model.funnel_label(game["def_away"]),
+                model.funnel_label(game["def_home"]),
+            ))
 
     with st.expander("How the number is built"):
         st.markdown(f"""
-Every projection is **player baseline × opponent defense × game environment**.
+Every projection is **player baseline × opponent defense × game environment**,
+and every row shows which of the three actually moved it.
 
 - **Player baseline** — per-game volume and efficiency from {SEASON - 1}–{SEASON}
   game logs, weighted toward recent games. Efficiency and scoring rates are
   pulled toward the position average until a player has enough games to have
-  earned his own.
+  earned his own. Scoring is per *touch*, so a backup does not inherit a
+  starter's touchdown rate.
 - **Opponent defense** — yards allowed *per play*, not per game, so a defense
   is not punished for its own offense leaving it on the field. Split into pass
   and run, and again by the position being covered. The gap between the two is
   the funnel read in each game header.
-- **Game environment** — the implied team total from the spread and total.
+- **Game environment** — the implied team total from the spread and the total.
   Favourites run more and throw less.
 
-The edge is our probability minus the book's with the vig removed. Yardage
-markets use a normal spread that includes how little we may know about a
-player; touchdowns and interceptions use Poisson.
+**The book does not get a vote.** The line is printed beside our number so you
+can see the two side by side, but it never picks a side and never changes the
+order. Rows are ranked on our own read and on how much of that read we have
+earned — games on the player, how much of it is from this season, and games on
+the defense. That is the pip meter on the right.
 
 Nothing here is fitted to past results, and it has not been backtested.
 """)

@@ -1,15 +1,25 @@
 """HTML for the board. Streamlit has no native element that puts a team
-logo, a player headshot, a line, a projection and an edge bar on one dense
-row, so the game panels are hand-built markup; everything else in the app is
-a native widget."""
+logo, a player headshot, our number, the book's number and a written reason
+on one dense row, so the panels are hand-built markup; everything else in
+the app is a native widget.
+
+The layout is deliberately ordered: who, what we think he does, why we think
+it, and only then what the book has posted. The price is a reference column,
+never the headline.
+"""
 from __future__ import annotations
 
 import html
+
+import model
 
 # nflverse abbreviation -> the slug ESPN's logo CDN uses
 ESPN_SLUG = {"WAS": "wsh", "LA": "lar"}
 
 SHIELD = "https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png"
+
+# how many reasons fit on a row before it stops being readable
+MAX_DRIVERS = 3
 
 
 def logo(abbr: str) -> str:
@@ -26,6 +36,10 @@ def american(odds) -> str:
     return f"+{odds:.0f}" if odds > 0 else f"{odds:.0f}"
 
 
+# the scale itself lives in model.py, next to what produces it
+confidence_word = model.confidence_word
+
+
 STYLE = """
 <style>
 :root {
@@ -35,6 +49,7 @@ STYLE = """
   --rule:     #2A2A33;
   --text:     #EDEDED;
   --dim:      #7A7A88;
+  --dimmer:   #55555F;
   --acid:     #C6FF00;
   --hot:      #FF2D7E;
   --cyan:     #00E5FF;
@@ -49,6 +64,12 @@ STYLE = """
 .np-head .t em { font-style:normal; color:var(--acid); }
 .np-head .s { color:var(--dim); font-size:13px; letter-spacing:2.5px;
               text-transform:uppercase; margin-top:4px; }
+
+/* ---- section rule -------------------------------------------------- */
+.np-sect { display:flex; align-items:baseline; gap:14px; margin:6px 0 14px; }
+.np-sect .h { font-family:Anton,Impact,sans-serif; font-size:24px; letter-spacing:.8px;
+              text-transform:uppercase; color:var(--hot); }
+.np-sect .d { font-size:11.5px; color:var(--dim); letter-spacing:.4px; }
 
 /* ---- one game ------------------------------------------------------ */
 .np-game { border:1px solid var(--rule); background:var(--panel); margin-bottom:26px; }
@@ -79,8 +100,9 @@ STYLE = """
 .read-bal  { color:var(--dim); }
 
 /* ---- prop rows ----------------------------------------------------- */
-.np-row { display:grid; grid-template-columns:44px minmax(150px,1.5fr) 128px 84px 84px 1fr 86px;
-          align-items:center; gap:12px; padding:9px 16px;
+.np-row { display:grid;
+          grid-template-columns:44px minmax(132px,1.1fr) 104px 96px 88px minmax(200px,1.9fr) 76px;
+          align-items:center; gap:12px; padding:10px 16px;
           border-bottom:1px solid rgba(42,42,51,.55); }
 .np-row:last-child { border-bottom:none; }
 .np-row:hover { background:rgba(198,255,0,.035); }
@@ -95,33 +117,57 @@ STYLE = """
 .np-mkt  { font-size:10px; letter-spacing:1.1px; text-transform:uppercase; color:var(--dim);
            border-left:2px solid var(--rule); padding-left:9px; }
 
-.np-num  { font-family:'Space Mono',monospace; text-align:right; }
-.np-num .big { font-size:16px; font-weight:700; display:block; line-height:1.15; }
-.np-num .cap { font-size:9px; color:var(--dim); letter-spacing:1.3px; text-transform:uppercase; }
-.proj .big { color:var(--cyan); }
+/* our number leads; the book's sits beside it, smaller and grey */
+.np-ours { font-family:'Space Mono',monospace; text-align:right; }
+.np-ours .big { font-size:21px; font-weight:700; color:var(--cyan); display:block;
+                line-height:1.1; }
+.np-ours .cap { font-size:9px; color:var(--cyan); opacity:.75; letter-spacing:1.5px;
+                text-transform:uppercase; }
+.np-book { font-family:'Space Mono',monospace; text-align:right; color:var(--dimmer); }
+.np-book .big { font-size:13px; font-weight:700; display:block; line-height:1.15; }
+.np-book .cap { font-size:9px; letter-spacing:1.3px; text-transform:uppercase; }
+.np-gap { font-size:10px; font-weight:700; }
+.gap-over  { color:var(--acid); }
+.gap-under { color:var(--hot); }
 
-/* edge bar */
-.np-bar-wrap { display:flex; align-items:center; gap:9px; }
-.np-track { position:relative; flex:1; height:7px; background:#1C1C24; min-width:60px; }
-.np-fill  { position:absolute; top:0; bottom:0; left:0; }
-.fill-over  { background:var(--acid); }
-.fill-under { background:var(--hot); }
-.np-why { font-size:10px; color:var(--dim); white-space:nowrap; overflow:hidden;
-          text-overflow:ellipsis; }
+/* the reasons */
+.np-why  { min-width:0; }
+.np-drv  { font-size:11px; color:#B6B6C2; line-height:1.45; white-space:nowrap;
+           overflow:hidden; text-overflow:ellipsis; }
+.np-drv i { font-style:normal; font-weight:700; margin-right:5px; }
+.up   { color:var(--acid); }
+.down { color:var(--hot); }
+.flat { color:var(--dimmer); }
 
-.np-call { text-align:right; font-family:'Space Mono',monospace; }
-.np-side-tag { font-size:11px; font-weight:700; letter-spacing:1.4px; }
-.tag-over  { color:var(--acid); }
-.tag-under { color:var(--hot); }
-.np-edge { font-size:17px; font-weight:700; display:block; line-height:1.15; }
-.np-odds { font-size:10px; color:var(--dim); }
+/* confidence meter */
+.np-conf { text-align:right; }
+.np-pips { display:flex; gap:2px; justify-content:flex-end; margin-bottom:3px; }
+.np-pip  { width:9px; height:6px; background:#23232C; }
+.np-pip.on { background:var(--acid); }
+.np-conf .w { font-size:9px; color:var(--dim); letter-spacing:.9px; text-transform:uppercase; }
 
-.np-flagnote { grid-column:3 / -1; font-size:10.5px; color:var(--hot); letter-spacing:.5px; }
+.np-flagnote { grid-column:4 / -1; font-size:10.5px; color:var(--hot); letter-spacing:.5px; }
 .np-empty { padding:16px; color:var(--dim); font-size:13px; }
 
-@media (max-width: 900px) {
-  .np-row { grid-template-columns:38px 1fr 76px 76px; }
-  .np-mkt, .np-bar-wrap { display:none; }
+/* ---- scorers leaderboard ------------------------------------------- */
+.np-board { border:1px solid var(--rule); background:var(--panel); margin-bottom:30px; }
+.np-sc { display:grid;
+         grid-template-columns:40px 42px minmax(140px,1.1fr) 132px 92px 84px minmax(180px,1.7fr);
+         align-items:center; gap:12px; padding:10px 16px;
+         border-bottom:1px solid rgba(42,42,51,.55); }
+.np-sc:last-child { border-bottom:none; }
+.np-sc:hover { background:rgba(255,45,126,.05); }
+.np-rank { font-family:Anton,Impact,sans-serif; font-size:23px; color:var(--hot);
+           text-align:center; line-height:1; }
+.np-rank.cool { color:var(--dimmer); }
+.np-game-of { font-size:10.5px; color:var(--dim); letter-spacing:.9px; text-transform:uppercase; }
+.np-game-of b { color:var(--text); font-weight:700; }
+
+@media (max-width: 1000px) {
+  .np-row { grid-template-columns:38px 1fr 92px 84px; }
+  .np-mkt, .np-why, .np-conf { display:none; }
+  .np-sc  { grid-template-columns:34px 38px 1fr 88px 80px; }
+  .np-game-of, .np-sc .np-why { display:none; }
 }
 </style>
 """
@@ -134,14 +180,38 @@ _READ_CLASS = {
     "balanced": "read-bal",
 }
 
+_LEAN_MARK = {1: ('<i class="up">&#9650;</i>', ""),
+              -1: ('<i class="down">&#9660;</i>', ""),
+              0: ('<i class="flat">&#8226;</i>', "")}
+
 
 def header(season: int, week: int, book: str, n_props: int) -> str:
     return (
         f'<div class="np-head"><img src="{SHIELD}" alt="NFL">'
         f'<div><div class="t">Prop <em>Board</em></div>'
-        f'<div class="s">{season} &middot; week {week} &middot; {esc(book)} '
-        f'&middot; {n_props} priced</div></div></div>'
+        f'<div class="s">{season} &middot; week {week} &middot; our read '
+        f'&middot; {n_props} players &middot; {esc(book)} shown for reference</div></div></div>'
     )
+
+
+def section(title: str, note: str) -> str:
+    return (f'<div class="np-sect"><div class="h">{esc(title)}</div>'
+            f'<div class="d">{esc(note)}</div></div>')
+
+
+def _pips(conf: float) -> str:
+    on = max(1, min(5, round(conf * 5 + 0.0001)))
+    cells = "".join(f'<div class="np-pip{" on" if i < on else ""}"></div>' for i in range(5))
+    return (f'<div class="np-conf"><div class="np-pips">{cells}</div>'
+            f'<div class="w">{esc(confidence_word(conf))}</div></div>')
+
+
+def _drivers_html(p: dict, limit: int = MAX_DRIVERS) -> str:
+    rows = []
+    for d in p.get("drivers", [])[:limit]:
+        mark = _LEAN_MARK.get(d.get("lean", 0), _LEAN_MARK[0])[0]
+        rows.append(f'<div class="np-drv">{mark}{esc(d["text"])}</div>')
+    return f'<div class="np-why">{"".join(rows)}</div>' if rows else '<div class="np-why"></div>'
 
 
 def _side(abbr: str, implied: float, read: str, home: bool) -> str:
@@ -178,43 +248,44 @@ def game_panel(game: dict, props: list[dict], away_read: str, home_read: str) ->
     )
 
 
-def _prop_row(p: dict) -> str:
-    over = p["side"] == "OVER"
-    tag = "tag-over" if over else "tag-under"
-    fill = "fill-over" if over else "fill-under"
-    # 25 points of edge fills the bar
-    width = max(2.0, min(100.0, abs(p["edge"]) * 400))
-
+def _our_cell(p: dict) -> str:
+    """What we think happens. Always the biggest thing on the row."""
     if p["market"] == "anytime_td":
-        line_cell = (f'<div class="np-num"><span class="big">'
-                     f'{p["market_prob"] * 100:.0f}%</span>'
-                     f'<span class="cap">book</span></div>')
-        proj_cell = (f'<div class="np-num proj"><span class="big">'
-                     f'{p["our_prob"] * 100:.0f}%</span>'
-                     f'<span class="cap">ours</span></div>')
-    else:
-        line_cell = (f'<div class="np-num"><span class="big">{p["line"]:g}</span>'
-                     f'<span class="cap">line</span></div>')
-        proj_cell = (f'<div class="np-num proj"><span class="big">'
-                     f'{p["projection"]:.1f}</span><span class="cap">proj</span></div>')
+        return (f'<div class="np-ours"><span class="big">{p["our_prob"] * 100:.0f}%</span>'
+                f'<span class="cap">to score</span></div>')
+    if p["market"] in ("pass_tds", "interceptions"):
+        return (f'<div class="np-ours"><span class="big">{p["projection"]:.2f}</span>'
+                f'<span class="cap">we project</span></div>')
+    return (f'<div class="np-ours"><span class="big">{p["projection"]:.0f}</span>'
+            f'<span class="cap">yards</span></div>')
 
+
+def _book_cell(p: dict) -> str:
+    """The market, kept small and grey on purpose."""
+    if p["market"] == "anytime_td":
+        body = (f'<span class="big">{p["market_prob"] * 100:.0f}%</span>'
+                f'<span class="cap">book {american(p["over"])}</span>')
+    else:
+        gap = p["delta"]
+        tail = ""
+        if gap is not None and abs(gap) >= 0.5:
+            cls = "gap-over" if gap > 0 else "gap-under"
+            tail = f'<span class="np-gap {cls}">{gap:+.0f} vs line</span><br>'
+        body = (f'<span class="big">{p["line"]:g}</span>{tail}'
+                f'<span class="cap">book line</span>')
+    return f'<div class="np-book">{body}</div>'
+
+
+def _prop_row(p: dict) -> str:
     face = (f'<img class="np-face" src="{esc(p["headshot"])}" alt="">'
             if p["headshot"] else '<div class="np-face"></div>')
-
-    status = f' &middot; <span style="color:#FF8A00">{esc(p["status"])}</span>' if p["status"] else ""
-    why = esc(_why(p))
+    status = (f' &middot; <span style="color:#FF8A00">{esc(p["status"])}</span>'
+              if p["status"] else "")
 
     if not p["playable"]:
         detail = f'<div class="np-flagnote">set aside &mdash; {esc(p["reason"])}</div>'
     else:
-        detail = (
-            f'<div class="np-bar-wrap"><div class="np-track">'
-            f'<div class="np-fill {fill}" style="width:{width:.0f}%"></div></div>'
-            f'<div class="np-why">{why}</div></div>'
-            f'<div class="np-call"><span class="np-side-tag {tag}">{p["side"]}</span>'
-            f'<span class="np-edge {tag}">{p["edge"] * 100:+.1f}</span>'
-            f'<span class="np-odds">{american(p["over"] if over else p["under"])}</span></div>'
-        )
+        detail = _our_cell(p) + _book_cell(p) + _drivers_html(p) + _pips(p["confidence"])
 
     return (
         f'<div class="np-row{"" if p["playable"] else " flagged"}">'
@@ -223,22 +294,53 @@ def _prop_row(p: dict) -> str:
         f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])} '
         f'vs {esc(p["opponent"])}{status}</div></div>'
         f'<div class="np-mkt">{esc(p["market_label"])}</div>'
-        f'{line_cell}{proj_cell}{detail}</div>'
+        f'{detail}</div>'
     )
 
 
-def _why(p: dict) -> str:
-    """One line on what actually moved the number."""
-    bits = []
-    mult = p["def_mult"]
-    if abs(mult - 1) >= 0.03:
-        verb = "softer" if mult > 1 else "tougher"
-        bits.append(f'{p["opponent"]} D {abs(mult - 1) * 100:.0f}% {verb}')
-    margin = p["script"]["margin"]
-    if abs(margin) >= 3:
-        bits.append("favoured by %.0f" % margin if margin > 0 else "dog by %.0f" % -margin)
-    if p["delta"] is not None and abs(p["delta"]) >= 1:
-        bits.append(f'{p["delta"]:+.0f} yd vs line')
-    if p["cur_share"] < 0.30:
-        bits.append(f'{p["cur_share"] * 100:.0f}% this season')
-    return "  /  ".join(bits) if bits else "no strong matchup lean"
+def scorer_board(rows: list[dict]) -> str:
+    """Everyone on the slate ranked by our probability that they score."""
+    if not rows:
+        return '<div class="np-board"><div class="np-empty">No scorers priced yet.</div></div>'
+    return '<div class="np-board">' + "".join(
+        _scorer_row(i + 1, p) for i, p in enumerate(rows)) + '</div>'
+
+
+def _scorer_row(rank: int, p: dict) -> str:
+    face = (f'<img class="np-face" src="{esc(p["headshot"])}" alt="">'
+            if p["headshot"] else '<div class="np-face"></div>')
+    cool = "" if rank <= 10 else " cool"
+    return (
+        f'<div class="np-sc">'
+        f'<div class="np-rank{cool}">{rank}</div>{face}'
+        f'<div class="np-who"><div class="np-name">{esc(p["player"])}</div>'
+        f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])}</div></div>'
+        f'<div class="np-game-of"><b>{esc(p["team"])}</b> vs {esc(p["opponent"])}<br>'
+        f'{p["script"]["implied"]:.1f} implied pts</div>'
+        + _our_cell(p) + _book_cell(p) + _drivers_html(p, 2) +
+        f'</div>'
+    )
+
+
+def yardage_board(rows: list[dict]) -> str:
+    """One market ranked by our projection, biggest first."""
+    if not rows:
+        return '<div class="np-board"><div class="np-empty">Nothing priced for that market.</div></div>'
+    return '<div class="np-board">' + "".join(
+        _yardage_row(i + 1, p) for i, p in enumerate(rows)) + '</div>'
+
+
+def _yardage_row(rank: int, p: dict) -> str:
+    face = (f'<img class="np-face" src="{esc(p["headshot"])}" alt="">'
+            if p["headshot"] else '<div class="np-face"></div>')
+    cool = "" if rank <= 10 else " cool"
+    return (
+        f'<div class="np-sc">'
+        f'<div class="np-rank{cool}">{rank}</div>{face}'
+        f'<div class="np-who"><div class="np-name">{esc(p["player"])}</div>'
+        f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])}</div></div>'
+        f'<div class="np-game-of"><b>{esc(p["team"])}</b> vs {esc(p["opponent"])}<br>'
+        f'{esc(confidence_word(p["confidence"]))}</div>'
+        + _our_cell(p) + _book_cell(p) + _drivers_html(p, 2) +
+        f'</div>'
+    )

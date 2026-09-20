@@ -105,11 +105,18 @@ def build(season: int, week: int, book: str, stats: dict,
         our = model.cover_probability(market, projection, ln["line"], sd)
         mkt = lines.no_vig(ln["over"], ln["under"])
 
+        # The call comes from our number against the line, NOT from our number
+        # against the book's. The price is a reference printed beside the
+        # read; it is not allowed to pick the side or set the ranking.
         one_sided = market in lines.ONE_SIDED
-        if one_sided or our >= mkt:
+        if one_sided or our >= 0.5:
             side, edge = "OVER", our - mkt
         else:
             side, edge = "UNDER", mkt - our
+
+        conf = model.confidence(base, dprof)
+        conv = model.conviction(market, our, conf)
+        why = model.drivers(base, dprof, script, market, proj_all, opp)
 
         playable, reason = model.role_check(base, market, projection, ln["line"],
                                             our_prob=our, market_prob=mkt)
@@ -135,6 +142,9 @@ def build(season: int, week: int, book: str, stats: dict,
             "market_prob": mkt,
             "side": side,
             "edge": edge,
+            "confidence": conf,
+            "conviction": conv,
+            "drivers": why,
             "delta": projection - ln["line"] if market in model.YARDAGE else None,
             "def_mult": _mult_for(market, dprof, base),
             "cur_share": base["cur_share"],
@@ -152,15 +162,27 @@ def build(season: int, week: int, book: str, stats: dict,
     for gid, props in buckets.items():
         game = next(g for g in sched.values() if g["game_id"] == gid)
         _propagate_role_flags(props)
-        # playable props first, then by edge; a flagged prop never outranks
-        # one we can actually stand behind
-        props.sort(key=lambda p: (not p["playable"], -p["edge"]))
+        # Readable props first, then what we think a player DOES, then how
+        # strongly we hold it.
+        #
+        # Not by edge -- a big number against the book usually means we are
+        # missing something, and it is not what this board is for. And not by
+        # conviction alone either: "confidently under a small line" scores as
+        # high as "confidently productive", so a third-string back projected
+        # for 3 rushing yards against a 5.5 line led the panel ahead of the
+        # players the game is actually about. Affirmative reads come first;
+        # the unders are still there, underneath.
+        props.sort(key=lambda p: (not p["playable"],
+                                  p["side"] != "OVER",
+                                  -p["conviction"]))
         out_games.append({
             **game,
             "props": props,
             "def_away": defense.get(game["away"], {}),
             "def_home": defense.get(game["home"], {}),
-            "best_edge": max((p["edge"] for p in props if p["playable"]), default=0.0),
+            "best_conviction": max((p["conviction"] for p in props
+                                    if p["playable"] and p["side"] == "OVER"),
+                                   default=0.0),
         })
     out_games.sort(key=lambda g: (g["gameday"], g["gametime"]))
 
@@ -209,3 +231,24 @@ def _propagate_role_flags(props: list[dict]) -> None:
         if p["playable"] and p["player"] in flagged:
             p["playable"] = False
             p["reason"] = flagged[p["player"]]
+
+
+def scorers(data: dict, limit: int = 40) -> list[dict]:
+    """Everyone on the slate, ranked by our own probability that they find
+    the end zone. This is the plain question the board exists to answer, so
+    it is ranked on our number and nothing else -- the book's price rides
+    along as a reference column."""
+    found = [p for g in data["games"] for p in g["props"]
+             if p["market"] == "anytime_td" and p["playable"]]
+    found.sort(key=lambda p: -p["our_prob"])
+    return found[:limit]
+
+
+def leaders(data: dict, market: str, limit: int = 25) -> list[dict]:
+    """Ranked by our projection for one yardage or count market, biggest
+    first -- who we think puts up the most, regardless of where the line
+    sits."""
+    rows = [p for g in data["games"] for p in g["props"]
+            if p["market"] == market and p["playable"]]
+    rows.sort(key=lambda p: -p["projection"])
+    return rows[:limit]
