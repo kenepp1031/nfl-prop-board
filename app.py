@@ -13,14 +13,30 @@ st.set_page_config(page_title="NFL prop board", page_icon="🏈", layout="wide")
 SEASON = 2026
 
 
-@st.cache_data(ttl=60 * 60 * 6, show_spinner="Pulling nflverse game logs...")
+# refresh_mode="background" on both pulls: when the TTL runs out, the next
+# person through the door gets the board they were going to get anyway and
+# the refresh happens behind them. Without it, whoever happens to click
+# first after the clock expires pays the whole pull while staring at a
+# spinner. Prop lines a couple of minutes stale are worth far more than a
+# blocked page.
+@st.cache_data(ttl=60 * 60 * 6, refresh_mode="background",
+               show_spinner="Pulling nflverse game logs...")
 def load_stats(season: int):
     return board.load_stats(season)
 
 
-@st.cache_data(ttl=60 * 10, show_spinner="Pulling lines...")
+@st.cache_data(ttl=60 * 10, refresh_mode="background",
+               show_spinner="Pulling lines...")
+def load_offers(season: int, week: int):
+    """The slow half of the market pull, and it is book-agnostic: one offer
+    arrives with DraftKings' price and FanDuel's on it. Cached by week alone
+    so flipping the book costs nothing."""
+    return lines.raw_offers(season, week)
+
+
+@st.cache_data(ttl=60 * 10)
 def load_lines(season: int, week: int, book_id: int):
-    return lines.fetch(season, week, book_id)
+    return lines.price(load_offers(season, week), book_id)
 
 
 def current_week(schedule: list[dict]) -> int:

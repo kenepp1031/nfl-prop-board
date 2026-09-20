@@ -7,12 +7,25 @@ Rotowire fallback that covers four of the seven markets.
 """
 from __future__ import annotations
 
+import concurrent.futures as futures
 import json
 import re
-import time
 import unicodedata
 import urllib.parse
 import urllib.request
+
+from common import cached_json
+
+# The API caps `limit` at 10, so a full week is around sixty small requests.
+# Done one after another that is most of a minute of pure waiting, and the
+# board cannot draw until the last one lands. They are independent, so they
+# go out together instead. Eight at a time is roughly what a browser opens
+# to one host; it is not a heavier load on them than a person with the site
+# in a tab, just a shorter queue.
+PARALLEL = 8
+
+# One pull covers every book, so it is cached by week and nothing else.
+OFFERS_TTL_HOURS = 10 / 60
 
 API = "https://api.bettingpros.com/v3/"
 API_KEY = "CHi8Hy5CEE4khd46XNYL23dCFX96oUdw6qOt1Dnh"
@@ -70,21 +83,100 @@ def events(season: int, week: int) -> list[dict]:
     return _get(f"events?{q}").get("events", [])
 
 
-def _offers(market_id: int, event_ids: str) -> list[dict]:
-    """`limit` is capped at 10 by the API, so every market has to be paged."""
-    out, page = [], 1
-    while True:
-        q = urllib.parse.urlencode({
-            "sport": "NFL", "market_id": market_id,
-            "event_id": event_ids, "limit": 10, "page": page,
-        })
-        data = _get(f"offers?{q}")
-        out += data.get("offers", [])
-        pages = data.get("_pagination", {}).get("total_pages", 1)
-        if page >= pages or page > 60:
-            return out
-        page += 1
-        time.sleep(0.1)
+def _page(market_id: int, event_ids: str, page: int) -> dict:
+    q = urllib.parse.urlencode({
+        "sport": "NFL", "market_id": market_id,
+        "event_id": event_ids, "limit": 10, "page": page,
+    })
+    return _get(f"offers?{q}")
+
+
+def _slim(offer: dict) -> dict:
+    """An offer cut down to the fields price() actually reads.
+
+    What comes back from the API is about eight megabytes a week, nearly all
+    of it prices at books we do not show and metadata we never look at.
+    Keeping only the columns the board uses makes the cached copy a tenth of
+    the size -- smaller on disk, smaller in memory for every open session,
+    and quicker to parse back in.
+    """
+    keep = set(BOOKS.values())
+    return {
+        "event_id": offer.get("event_id"),
+        "participants": [
+            {"id": p.get("id"), "name": p.get("name"),
+             "player": {"team": (p.get("player") or {}).get("team"),
+                        "position": (p.get("player") or {}).get("position")}}
+            for p in offer.get("participants") or []
+        ],
+        "selections": [
+            {"label": s.get("label"), "participant": s.get("participant"),
+             "books": [
+                 {"id": b.get("id"),
+                  "lines": [{"line": ln.get("line"), "cost": ln.get("cost"),
+                             "active": ln.get("active")}
+                            for ln in b.get("lines") or []]}
+                 for b in s.get("books") or [] if b.get("id") in keep
+             ]}
+            for s in offer.get("selections") or []
+        ],
+    }
+
+
+def _all_offers(event_ids: str, keys: list[str]) -> dict[str, list[dict]]:
+    """{market key: every offer posted for it}, in two waves.
+
+    The first page of a market is also what tells us how many pages it has,
+    so there is no way to ask for everything at once. Wave one gets page 1
+    of all seven markets and reads the page counts off them; wave two gets
+    every remaining page of every market together. Two round trips of
+    waiting instead of sixty.
+    """
+    out: dict[str, list[dict]] = {}
+    with futures.ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+        first = {k: pool.submit(_page, MARKETS[k], event_ids, 1) for k in keys}
+        pages: dict[str, list] = {}
+        rest = {}
+        for k, fut in first.items():
+            data = fut.result()
+            pages[k] = [data.get("offers", [])]
+            # 60 is a stop against a runaway pagination header, not a real
+            # limit -- a full week runs to about ten pages on the big markets.
+            total = min(int(data.get("_pagination", {}).get("total_pages", 1) or 1), 60)
+            for n in range(2, total + 1):
+                rest[pool.submit(_page, MARKETS[k], event_ids, n)] = (k, n)
+                pages[k].append(None)
+        for fut, (k, n) in rest.items():
+            pages[k][n - 1] = fut.result().get("offers", [])
+    for k, chunks in pages.items():
+        out[k] = [_slim(o) for c in chunks if c for o in c]
+    return out
+
+
+def raw_offers(season: int, week: int, markets: list[str] | None = None) -> dict:
+    """Every posted prop for one week with EVERY book's price still attached.
+
+    Deliberately book-agnostic. One offer carries DraftKings' number and
+    FanDuel's side by side, so the two books are one download and switching
+    between them is a filter, not another minute of paging. Memoised on disk
+    as well, so a restart -- or a second person opening the board -- reads a
+    file instead of the network.
+    """
+    keys = list(markets or MARKETS)
+    name = f"offers_{season}_w{week}_{'-'.join(sorted(keys))}.json"
+
+    def build():
+        evs = events(season, week)
+        if not evs:
+            return {"events": [], "offers": {}}
+        ids = ":".join(str(e["id"]) for e in evs)
+        return {
+            "events": [{"id": e["id"], "visitor": e.get("visitor"),
+                        "home": e.get("home")} for e in evs],
+            "offers": _all_offers(ids, keys),
+        }
+
+    return cached_json(name, OFFERS_TTL_HOURS, build)
 
 
 def _price(books: list[dict], book_id: int) -> tuple[float | None, float | None]:
@@ -99,25 +191,24 @@ def _price(books: list[dict], book_id: int) -> tuple[float | None, float | None]
     return None, None
 
 
-def fetch(season: int, week: int, book_id: int,
+def price(raw: dict, book_id: int,
           markets: list[str] | None = None) -> list[dict]:
-    """Every posted prop for one week at one book, normalised to:
-    {market, player, player_key, team, opponent, line, over, under}
-    where `over`/`under` are American odds. One-sided markets carry the price
-    in `over` and leave `under` as None.
+    """One book's board, read off the shared pull by raw_offers().
+
+    Pure arithmetic over data already in hand -- no network. This is the half
+    that differs between DraftKings and FanDuel, and it costs milliseconds.
     """
-    evs = events(season, week)
+    evs = raw.get("events") or []
     if not evs:
         return []
-    ids = ":".join(str(e["id"]) for e in evs)
     # event id -> (away, home); both arrive as plain team abbreviations
     teams_by_event = {e["id"]: (str(e.get("visitor") or "").upper(),
                                 str(e.get("home") or "").upper()) for e in evs}
+    by_market = raw.get("offers") or {}
 
     out: list[dict] = []
     for key in (markets or list(MARKETS)):
-        mid = MARKETS[key]
-        for offer in _offers(mid, ids):
+        for offer in by_market.get(key, []):
             parts = {str(p.get("id")): p for p in offer.get("participants", [])}
             sels = offer.get("selections", [])
 
@@ -152,6 +243,16 @@ def fetch(season: int, week: int, book_id: int,
                 continue
             out.append(_row(key, p, offer, line, over, under, teams_by_event))
     return out
+
+
+def fetch(season: int, week: int, book_id: int,
+          markets: list[str] | None = None) -> list[dict]:
+    """Every posted prop for one week at one book, normalised to:
+    {market, player, player_key, team, opponent, line, over, under}
+    where `over`/`under` are American odds. One-sided markets carry the price
+    in `over` and leave `under` as None.
+    """
+    return price(raw_offers(season, week, markets), book_id, markets)
 
 
 def _row(market: str, participant: dict, offer: dict,

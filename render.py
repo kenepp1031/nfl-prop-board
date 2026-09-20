@@ -110,7 +110,14 @@ STYLE = """
 /* ---- one game ------------------------------------------------------ */
 /* A <details> so a game opens and closes with no rerun -- clicking a
    header must not cost a round trip through Streamlit. */
-.np-game { border:1px solid var(--rule); background:var(--panel); margin-bottom:10px; }
+.np-game { border:1px solid var(--rule); background:var(--panel); margin-bottom:10px;
+  /* Sixteen games of props is most of a megabyte of markup. This lets the
+     browser skip laying out and painting the ones that are off-screen until
+     you scroll to them -- the page arrives in one piece either way, it just
+     does not do the work up front. `auto` on the intrinsic size means it
+     remembers how tall each panel actually was, so the scrollbar does not
+     jump around once you have been past a game. */
+  content-visibility:auto; contain-intrinsic-size:auto 68px; }
 .np-game > summary { cursor:pointer; list-style:none; display:block; }
 .np-game > summary::-webkit-details-marker { display:none; }
 .np-game > summary::marker { content:""; }

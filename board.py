@@ -31,8 +31,11 @@ def load_stats(season: int) -> dict:
     # to the time he was available rather than to the whole calendar.
     absences = nflverse.out_weeks(years, season)
     baselines = model.player_baselines(weeks, season, absences)
+    # `weeks` itself is deliberately NOT returned. Nothing downstream reads
+    # the raw game logs -- the baselines and the defense profiles are the
+    # whole of what they produce -- and it is twenty thousand rows that the
+    # cache would otherwise pickle and carry in memory for every session.
     return {
-        "weeks": weeks,
         "baselines": baselines,
         "defense": model.defense_profiles(weeks, season),
         "priors": model.spread_priors(baselines),

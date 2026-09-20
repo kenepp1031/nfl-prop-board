@@ -1,1 +1,3 @@
-streamlit>=1.57
+# The whole app is standard library plus Streamlit -- no pandas, no requests.
+# Upper bound because a 2.x would be free to move the widgets under us.
+streamlit>=1.57,<2

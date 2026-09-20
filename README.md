@@ -124,8 +124,53 @@ what was dropped and why.
 | `lines.py` | DK / FD lines |
 | `nflverse.py` | game logs, schedule, injuries |
 | `render.py` | the game panel markup |
-| `common.py` | disk-cached fetch |
+| `common.py` | disk-cached fetch and disk memo |
 | `.streamlit/config.toml` | the theme |
+| `requirements.txt`, `.python-version` | what a host needs to build it |
+
+## Speed
+
+The board itself is cheap -- the join and the whole page of markup together
+are about twenty milliseconds, so clicking a filter is instant. Everything
+slow is the market pull, and it is handled three ways:
+
+- **One pull covers both books.** A BettingPros offer arrives with
+  DraftKings' price and FanDuel's on the same object, so `raw_offers()` is
+  keyed by week and nothing else. Switching book is `price()` over data
+  already in hand.
+- **The pages go out together.** The API caps a page at ten offers, so a
+  week is about sixty requests. Done one after another that is most of a
+  minute. They are independent, so they run eight at a time in two waves --
+  page 1 of every market to learn the page counts, then all the rest.
+- **It is memoised on disk as well as in the cache**, trimmed to the fields
+  the board reads. A restart, or a second person opening the board, reads a
+  half-megabyte file instead of hitting the network. When the ten-minute
+  clock runs out the refresh happens *behind* whoever is looking, rather
+  than making them wait for it.
+
+Cold, with the nflverse logs already down: about **1.7 seconds** to a drawn
+board. Switching book or moving a filter: **about twenty milliseconds**.
+
+## Running it somewhere else
+
+It is standard library plus Streamlit, so there is nothing to provision.
+
+1. Push the repo to GitHub.
+2. At [share.streamlit.io](https://share.streamlit.io), *Create app* -> from
+   your repo, branch `master`, main file `app.py`.
+3. Nothing goes in Secrets. There are no accounts and no keys of ours.
+
+`cache/` is gitignored and rebuilds itself on first run; on a host it is
+scratch space that disappears on redeploy, which costs one cold pull.
+
+Two things to know before you point other people at it. The BettingPros
+endpoint is undocumented and is being called from a shared cloud address
+rather than your house -- if it ever starts refusing, that is the first
+thing to suspect, and the disk memo is what keeps a refusal from blanking
+the board. And the API key in `lines.py` is the one bettingpros.com ships in
+its own frontend, not a credential of yours; it is already public, but a
+public repo does put it somewhere a scraper will find it. A private repo
+works on the free tier and avoids the question.
 
 ## Known limits
 

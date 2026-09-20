@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import json
 import time
 import urllib.request
 from pathlib import Path
@@ -42,3 +43,34 @@ def cached_fetch(name: str, url: str, max_age_hours: float,
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
     return text
+
+
+def cached_json(name: str, max_age_hours: float, build):
+    """Disk memo for something we assemble ourselves rather than download in
+    one piece -- the prop offers, which take dozens of API calls to collect.
+
+    Same contract as cached_fetch: a fresh copy on disk short-circuits the
+    work, and if `build` raises we serve a stale copy rather than take the
+    whole board down. A restart, or a second viewer, costs a file read
+    instead of a minute of paging.
+    """
+    CACHE_DIR.mkdir(exist_ok=True)
+    path = CACHE_DIR / name
+
+    if path.exists() and (time.time() - path.stat().st_mtime) < max_age_hours * 3600:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            pass                                  # truncated write; rebuild it
+
+    try:
+        data = build()
+    except Exception:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        raise
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(path)
+    return data
