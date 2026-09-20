@@ -31,7 +31,10 @@ def current_week(schedule: list[dict]) -> int:
 
 
 # --- fast UI first, slow pulls after ---------------------------------------
-st.html(render.STYLE)
+# st.html() sanitises with DOMPurify, which drops <style> blocks outright --
+# the whole theme silently disappears and the board renders as raw logos.
+# st.markdown keeps them. Everything else we emit goes through st.html.
+st.markdown(render.STYLE, unsafe_allow_html=True)
 header_slot = st.container()
 body_slot = st.container()
 
