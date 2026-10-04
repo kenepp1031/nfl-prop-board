@@ -297,6 +297,15 @@ def _mult_for(market: str, dprof: dict, base: dict) -> float:
     return (dprof.get("rush_td", 1.0) + dprof.get("pass_td", 1.0)) / 2
 
 
+# The market that carries a player's role: the line the book would move if it
+# knew he was starting, or knew he was not. A flag raised here is about the
+# player and travels to his other props. A flag raised anywhere else -- a
+# quarterback's rushing yards, a back's receiving yards -- is about one small
+# line and stays on it.
+PRIMARY_MARKET = {"QB": "pass_yds", "RB": "rush_yds", "FB": "rush_yds",
+                  "WR": "rec_yds", "TE": "rec_yds"}
+
+
 def _propagate_role_flags(props: list[dict]) -> None:
     """If we cannot read a player's role, that applies to all of his props.
 
@@ -304,10 +313,18 @@ def _propagate_role_flags(props: list[dict]) -> None:
     yardage markets. But a quarterback whose passing-yards line says he is
     starting when our logs say he is a backup has an unreadable interception
     prop too -- same missing information, different market.
+
+    Only his main market gets to say that. The first version spread a flag
+    from any market, and a 0.5 rushing line on a pocket quarterback took his
+    passing props off the board with it -- Goff, Stafford and Cousins on the
+    same Sunday, along with four lead backs whose receiving line was a few
+    yards from ours. A flag on a side market now stays on that row.
     """
     flagged: dict[str, str] = {}
     for p in props:
-        if not p["playable"] and p["reason"]:
+        if p["playable"] or not p["reason"]:
+            continue
+        if p["market"] == PRIMARY_MARKET.get(p["position"]):
             flagged.setdefault(p["player"], p["reason"])
     for p in props:
         if p["playable"] and p["player"] in flagged:

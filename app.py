@@ -94,17 +94,20 @@ with st.sidebar:
             default=list(lines.MARKET_LABELS),
         )
 
+    # Both default to showing everything the book has priced. Raise the floor
+    # or switch the toggle off to trim; nothing is hidden until you ask.
     min_conf = st.select_slider(
         "Least I will look at",
         options=[w for _, w in reversed(model.CONF_WORDS)],
-        value="fair read",
+        value="thin read",
         help="How much of the read is actually earned: how many games we have "
              "on the player, how much of it is from this season, and how many "
-             "games we have on the defense.")
+             "games we have on the defense. Thin read shows every player.")
     show_flagged = st.toggle(
-        "Show set-aside props", value=False,
+        "Show set-aside props", value=True,
         help="Props where the line implies a role our game logs cannot see, "
-             "or the player is listed out. Shown greyed, never ranked.")
+             "or the player is listed out. Shown greyed at the bottom of the "
+             "game with the reason, and left out of the ranked views.")
     if view == "By game":
         open_all = st.toggle(
             "Open every game", value=False,

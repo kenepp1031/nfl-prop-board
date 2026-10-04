@@ -143,9 +143,23 @@ A prop is set aside, greyed and never ranked, when the market's line implies a
 role our game logs cannot see — a promotion, an injury ahead of him on the
 depth chart — or the player is listed out. A backup quarterback projected for
 77 yards against a 204.5 line is not a 34% edge; it means the book knows he is
-starting and we do not. The flag covers every prop that player has in that
-game, not just the one that tripped it. Toggle them on in the sidebar to see
-what was dropped and why.
+starting and we do not. Set-aside rows stay on the By game board, greyed at
+the bottom of the panel with our number, the book's and the reason, so every
+player the book has priced is on the page; the sidebar toggle hides them.
+They are left out of Who scores and Top projections, which rank on a number
+we have just said we do not trust.
+
+The test is a ratio, and a ratio alone misreads small lines. A quarterback's
+rushing yards posted at 0.5 against our 5.5 is "0.1x", a lead back's receiving
+yards at 6.5 against our 3.2 is "2.0x", and the first version flagged both and
+then hid every prop those players had — ten starters on one Sunday, Kyren
+Williams and Jared Goff among them, each over a line a few yards long. Two
+rules stop that now. The two numbers have to be at least fifteen yards apart
+as well as out of ratio before we call it a role we cannot see. And a flag
+spreads to a player's other props only when it was raised on the market that
+carries his role — passing yards for a quarterback, rushing for a back,
+receiving for a receiver or tight end. A flag on anything else is about that
+one small line and stays on it.
 
 A thin sample makes that test stricter; it does not decide it. A player with
 few games gets a narrower band to disagree in before we conclude we are the

@@ -225,7 +225,9 @@ STYLE = """
 .np-pip.on { background:var(--acid); }
 .np-conf .w { font-size:9px; color:var(--dim); letter-spacing:.9px; text-transform:uppercase; }
 
-.np-flagnote { grid-column:4 / -1; font-size:10.5px; color:var(--hot); letter-spacing:.5px; }
+/* a set-aside row keeps our number and the book's; the note takes the
+   place of the reasons and the pip meter */
+.np-flagnote { grid-column:6 / -1; font-size:10.5px; color:var(--hot); letter-spacing:.5px; }
 .np-empty { padding:16px; color:var(--dim); font-size:13px; }
 
 /* ---- scorers leaderboard ------------------------------------------- */
@@ -247,6 +249,7 @@ STYLE = """
   .np-tail { border-left:none; padding:6px 18px 13px; }
   .np-row { grid-template-columns:38px 1fr 92px 84px; }
   .np-mkt, .np-why, .np-conf { display:none; }
+  .np-flagnote { grid-column:1 / -1; }
   .np-sc  { grid-template-columns:34px 38px 1fr 88px 80px; }
   .np-game-of, .np-sc .np-why { display:none; }
 }
@@ -392,8 +395,10 @@ def _book_cell(p: dict) -> str:
         if gap is not None and abs(gap) >= 0.5:
             cls = "gap-over" if gap > 0 else "gap-under"
             tail = f'<span class="np-gap {cls}">{gap:+.0f} vs line</span><br>'
+        # the line leads; the two prices sit under it so the odds are on the
+        # row and not just the number they are attached to
         body = (f'<span class="big">{p["line"]:g}</span>{tail}'
-                f'<span class="cap">book line</span>')
+                f'<span class="cap">o{american(p["over"])} u{american(p["under"])}</span>')
     return f'<div class="np-book">{body}</div>'
 
 
@@ -417,7 +422,11 @@ def _prop_row(p: dict) -> str:
     status = (f' &middot; <span style="color:#FF8A00">{esc(p["status"])}</span>'
               if p["status"] else "")
     if not p["playable"]:
-        detail = f'<div class="np-flagnote">set aside &mdash; {esc(p["reason"])}</div>'
+        # Our number and the book's stay on the row: the note is about the
+        # gap between them, and a player the book has priced is on the page
+        # with his odds whatever we make of him.
+        detail = (_our_cell(p) + _book_cell(p)
+                  + f'<div class="np-flagnote">set aside &mdash; {esc(p["reason"])}</div>')
     else:
         detail = _our_cell(p) + _book_cell(p) + _drivers_html(p) + _pips(p["confidence"])
 
@@ -450,7 +459,8 @@ def _scorer_row(rank: int, p: dict) -> str:
         f'<div class="np-who"><div class="np-name">{esc(p["player"])}{_tag(p)}</div>'
         f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])}</div></div>'
         f'<div class="np-game-of"><b>{esc(p["team"])}</b> vs {esc(p["opponent"])}<br>'
-        f'{p["script"]["implied"]:.1f} implied pts</div>'
+        f'{p["script"]["implied"]:.1f} implied pts &middot; '
+        f'{esc(confidence_word(p["confidence"]))}</div>'
         + _our_cell(p) + _book_cell(p) + _drivers_html(p, 2) +
         f'</div>'
     )

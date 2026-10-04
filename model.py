@@ -82,6 +82,16 @@ THIN_ATD_MAX_RATIO = 2.0
 # Below this there is no usage to check a line against at all. One game is
 # not a role, so it is still set aside -- but it is one game, not three.
 MIN_ROLE_GAMES = 1.5
+# A ratio alone misreads small lines. A quarterback's rushing yards posted at
+# 0.5 against our 5.5 is "0.1x", a lead back's receiving yards at 6.5 against
+# our 3.2 is "2.0x", and both are a few yards apart -- noise on a number that
+# small, not a hidden depth chart. The first version flagged both, then hid
+# every prop those players had; ten starters came off one Sunday's board that
+# way. So the two numbers must also be this far apart in yards before the
+# ratio is allowed to call it a role. A line big enough to carry a role --
+# passing yards, a lead back's carries -- is never this close to our number
+# when the ratio trips, so the test costs nothing there.
+MIN_ROLE_GAP_YDS = 15.0
 
 # --- defense shrinkage -----------------------------------------------------
 # A rate measured off n plays is pulled toward league average by n/(n+K).
@@ -961,6 +971,10 @@ def role_check(base: dict, market: str, projection: float, line: float,
                            f"scoring chance - bigger role than we can see")
         return True, ""
     if market in COUNT:
+        return True, ""
+    # A few yards apart is a disagreement, not a role. Checked before the
+    # ratio, because the ratio is the part that goes wrong on a small line.
+    if abs(line - projection) < MIN_ROLE_GAP_YDS:
         return True, ""
     lo, hi = (THIN_ROLE_LOW, THIN_ROLE_HIGH) if thin else (ROLE_LOW, ROLE_HIGH)
     ratio = line / projection if projection else 0.0

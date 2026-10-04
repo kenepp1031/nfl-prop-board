@@ -59,16 +59,31 @@ MARKET_LABELS = {
 
 _SUFFIX = re.compile(r"\s+(jr|sr|ii|iii|iv|v)\.?$", re.I)
 
+# First names the books write one way and nflverse another: BettingPros has
+# "Joshua Palmer" and "Drew Ogletree", nflverse "Josh Palmer" and "Andrew
+# Ogletree", and neither got priced for it. The short form is applied to BOTH
+# sides of the join, so a name that already matched still does.
+_NICKNAMES = {
+    "joshua": "josh", "andrew": "drew", "matthew": "matt", "michael": "mike",
+    "christopher": "chris", "nicholas": "nick", "william": "will",
+    "zachary": "zach", "benjamin": "ben", "jonathan": "jon", "alexander": "alex",
+    "cameron": "cam", "daniel": "dan", "patrick": "pat", "joseph": "joe",
+    "robert": "rob", "thomas": "tom", "timothy": "tim", "samuel": "sam",
+    "jacob": "jake", "nathaniel": "nate", "anthony": "tony", "kenneth": "ken",
+    "jeffrey": "jeff", "gregory": "greg", "jeremiah": "jeremy",
+}
+
 
 def norm_name(name: str) -> str:
     """Join key between BettingPros and nflverse spellings: strip accents,
-    punctuation and generational suffixes."""
+    punctuation and generational suffixes, and shorten a formal first name."""
     s = unicodedata.normalize("NFKD", name or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.replace("'", "").replace(".", "").replace("-", " ")
     s = re.sub(r"\s+", " ", s).strip()
-    s = _SUFFIX.sub("", s)
-    return s.lower()
+    s = _SUFFIX.sub("", s).lower()
+    first, _, rest = s.partition(" ")
+    return f"{_NICKNAMES.get(first, first)} {rest}".strip()
 
 
 def _get(path: str) -> dict:
