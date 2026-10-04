@@ -3,7 +3,9 @@ posted prop, grouped by game."""
 from __future__ import annotations
 
 import collections
+import datetime as dt
 
+import depth
 import lines
 import model
 import nflverse
@@ -30,19 +32,58 @@ def load_stats(season: int) -> dict:
     # Weeks players were ruled out, so the confidence meter can hold a player
     # to the time he was available rather than to the whole calendar.
     absences = nflverse.out_weeks(years, season)
-    baselines = model.player_baselines(weeks, season, absences)
+    # The season each player came into the league, so a rookie's missing
+    # prior season reads as "not eligible" rather than "we never saw him".
+    entry = nflverse.entry_years(season)
+    baselines = model.player_baselines(weeks, season, absences, entry)
     # `weeks` itself is deliberately NOT returned. Nothing downstream reads
     # the raw game logs -- the baselines and the defense profiles are the
     # whole of what they produce -- and it is twenty thousand rows that the
     # cache would otherwise pickle and carry in memory for every session.
+    # The depth chart is what turns "listed out" into "so his carries go to
+    # the next back". A board without it still builds; it just cannot see
+    # past the injury.
+    try:
+        chart = depth.chart(season)
+    except Exception:
+        chart = {}
     return {
         "baselines": baselines,
         "defense": model.defense_profiles(weeks, season),
         "priors": model.spread_priors(baselines),
+        "team_att": model.team_pass_attempts(weeks, season),
         "schedule": nflverse.schedule(season),
         "injuries": nflverse.injuries(season),
+        "roster_status": nflverse.roster_status(season),
+        "depth": chart,
         "by_name": _name_index(baselines),
     }
+
+
+def _unavailable(injuries: dict, roster_status: dict[str, str], week: int) -> dict[str, str]:
+    """{player_id: why} for everyone off the field this week: out or
+    doubtful on the week's report, or on a reserve list per the roster. The
+    report wins when both say something."""
+    gone = {pid: status for pid, status in roster_status.items()
+            if status in nflverse.RESERVE}
+    for key, entry in injuries.items():
+        if (len(key) == 2 and key[0] == week
+                and entry.get("status", "").lower() in ("out", "doubtful")):
+            gone[key[1]] = entry["status"].lower()
+    return gone
+
+
+def current_week(schedule: list[dict]) -> int:
+    """The week whose games have not all kicked off yet.
+
+    Lives here rather than in app.py because the nightly refresh has to reach
+    the same answer -- warming last week's lines every morning would leave
+    the board pulling the new week's board from scratch on first open, which
+    is the whole thing the refresh exists to avoid.
+    """
+    today = dt.date.today().isoformat()
+    upcoming = [g["week"] for g in schedule if g["gameday"] >= today]
+    return min(upcoming) if upcoming else max(g["week"] for g in schedule)
 
 
 def _name_index(baselines: dict) -> dict:
@@ -60,8 +101,14 @@ def _name_index(baselines: dict) -> dict:
 
 
 def build(season: int, week: int, book: str, stats: dict,
-          market_lines: list[dict]) -> dict:
-    """Returns {'games': [...], 'unmatched': n, 'league_avg_total': x}."""
+          market_lines: list[dict], weather: dict | None = None) -> dict:
+    """Returns {'games': [...], 'unmatched': n, 'league_avg_total': x}.
+
+    `weather` is weather.forecasts() for the week, {game_id: forecast}. It is
+    optional on purpose: a board without a forecast is still a board, and
+    the refresh log is where a failed weather pull gets reported.
+    """
+    weather = weather or {}
     sched = {}
     for g in stats["schedule"]:
         if g["week"] == week:
@@ -79,6 +126,17 @@ def build(season: int, week: int, book: str, stats: dict,
     by_name = stats["by_name"]
     injuries = stats["injuries"]
 
+    # Who is off the field this week, and where their touches go. Worked out
+    # once per team from the week's report, the reserve list and the depth
+    # chart; a player whose volume changes projects off the adjusted copy.
+    gone = _unavailable(injuries, stats.get("roster_status") or {}, week)
+    teams = (stats.get("depth") or {}).get("teams") or {}
+    charted = {p["id"] for chart in teams.values() for rows in chart.values() for p in rows}
+    adjusted: dict[str, dict] = {}
+    for t, chart in teams.items():
+        adjusted.update(model.next_man_up(chart, stats["baselines"], gone, t, charted, week,
+                                          (stats.get("team_att") or {}).get(t, 0.0)))
+
     buckets: dict[str, list[dict]] = collections.defaultdict(list)
     unmatched: set[str] = set()
 
@@ -93,6 +151,8 @@ def build(season: int, week: int, book: str, stats: dict,
         if base is None:
             unmatched.add(ln["player"])
             continue
+        base = adjusted.get(base["player_id"], base)
+        promoted = bool((base.get("role_change") or {}).get("promoted"))
 
         dprof = defense.get(opp)
         if dprof is None:
@@ -100,7 +160,8 @@ def build(season: int, week: int, book: str, stats: dict,
 
         implied = game["implied_home"] if team == game["home"] else game["implied_away"]
         implied_opp = game["implied_away"] if team == game["home"] else game["implied_home"]
-        script = model.game_script(implied, implied_opp, league_avg_team_total)
+        script = model.game_script(implied, implied_opp, league_avg_team_total,
+                                   weather.get(game["game_id"]))
 
         proj_all = model.project(base, dprof, script)
         market = ln["market"]
@@ -121,14 +182,26 @@ def build(season: int, week: int, book: str, stats: dict,
             side, edge = "UNDER", mkt - our
 
         conf = model.confidence(base, dprof)
+        if promoted:
+            conf *= model.PROMOTED_CONF     # a role we inferred, not one we watched
         conv = model.conviction(market, our, conf)
         why = model.drivers(base, dprof, script, market, proj_all, opp)
 
         playable, reason = model.role_check(base, market, projection, ln["line"],
                                             our_prob=our, market_prob=mkt)
-        status = injuries.get((team, base["name"].lower()), "")
-        if status.lower() in ("out", "doubtful", "ir"):
-            playable, reason = False, f"listed {status.lower()}"
+        # THIS week's report, by player id first and name second. Out and
+        # doubtful set the prop aside; questionable, or a missed practice
+        # before the designations are out, is a tag on the row and nothing
+        # more -- that is a judgement for whoever is reading it.
+        hurt = (injuries.get((week, base["player_id"]))
+                or injuries.get((week, team, base["name"].lower())) or {})
+        status = hurt.get("status", "") or hurt.get("practice", "")
+        if hurt.get("injury"):
+            status = f"{status} · {hurt['injury']}" if status else ""
+        if hurt.get("status", "").lower() in ("out", "doubtful"):
+            playable = False
+            reason = f"listed {hurt['status'].lower()}" + (
+                f" ({hurt['injury']})" if hurt.get("injury") else "")
 
         buckets[game["game_id"]].append({
             "market": market,
@@ -158,6 +231,8 @@ def build(season: int, week: int, book: str, stats: dict,
             "eff_games": base["eff_games"],
             "games_cur": base["games_cur"],
             "thin": base["eff_games"] < model.MIN_EFF_GAMES,
+            "rookie": base.get("rookie", False),
+            "promoted": promoted,
             "playable": playable,
             "reason": reason,
             "status": status,
@@ -184,6 +259,7 @@ def build(season: int, week: int, book: str, stats: dict,
         out_games.append({
             **game,
             "props": props,
+            "weather": weather.get(gid),
             "def_away": defense.get(game["away"], {}),
             "def_home": defense.get(game["home"], {}),
             "best_conviction": max((p["conviction"] for p in props

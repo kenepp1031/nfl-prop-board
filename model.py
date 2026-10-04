@@ -35,6 +35,19 @@ MIN_EFF_GAMES = 3.0                            # below this a player is "thin"
 # out all year and has played once is still someone we barely know.
 MAX_EXCUSED = 0.5                              # most of the reference injuries can forgive
 
+# Weeks before a player's first NFL game come off that same bottom, and
+# unlike injuries they come off in full: a rookie did not fail to show us
+# last season, he was not eligible to play in it. Measuring him against a
+# two-season calendar halved his meter for the crime of being new, which is
+# the single reason no rookie ever cleared the board's default threshold.
+#
+# The floor is what stops that becoming a free pass. However short his
+# career, a player is measured against at least this much recent full-weight
+# playing time, so a Week 1 debut still reads as someone we barely know and
+# only a rookie who has actually played a quarter of a season reads as fully
+# seen. Three games, in the weights the decay gives the three most recent.
+DEBUT_MIN_GAMES = 3
+
 # --- player rate shrinkage -------------------------------------------------
 # A player's own efficiency and scoring rates are pulled toward his position
 # group's average until he has enough games to have earned them. Without this
@@ -57,6 +70,19 @@ ROLE_LOW, ROLE_HIGH = 0.55, 1.85
 ATD_LONGSHOT = 0.15      # only police prices the book has already written off
 ATD_MAX_RATIO = 3.0      # how far above that price our read may sit
 
+# A thin sample used to set a player aside outright, whatever the line said.
+# That is the wrong test: it answers "how long is his career" when the
+# question is "does the book think he has a role we cannot see". It set
+# aside every prop of every rookie on the board, including the ones the
+# market agreed with to the yard. A thin player now faces the same test as
+# anyone else, just a stricter one -- less room to disagree before we admit
+# we are the ones missing something.
+THIN_ROLE_LOW, THIN_ROLE_HIGH = 0.70, 1.45
+THIN_ATD_MAX_RATIO = 2.0
+# Below this there is no usage to check a line against at all. One game is
+# not a role, so it is still set aside -- but it is one game, not three.
+MIN_ROLE_GAMES = 1.5
+
 # --- defense shrinkage -----------------------------------------------------
 # A rate measured off n plays is pulled toward league average by n/(n+K).
 # K is "how many plays before we half-believe it", in plays faced.
@@ -71,6 +97,74 @@ DEF_MULT_CLAMP = (0.80, 1.25)                  # one odd game can't run away wit
 PASS_VOLUME_PER_POINT = 0.012
 RUSH_VOLUME_PER_POINT = 0.015
 SCRIPT_CLAMP = (0.82, 1.22)
+
+# --- weather ---------------------------------------------------------------
+# Wind is the one that matters. Under about ten miles an hour nobody plays
+# differently; over it every extra mile an hour makes the throw harder and
+# the run more attractive. At 20 mph this puts yards per throw 10% down,
+# throws 6% down and carries 8% up -- a windy day reads like being a
+# five-point favourite, on top of whatever the spread already says. It is
+# the sustained wind over the game, not the gust, that these are per.
+WIND_CALM_MPH = 10.0
+WIND_PASS_EFF_PER_MPH = 0.010
+WIND_PASS_VOL_PER_MPH = 0.006
+WIND_RUSH_VOL_PER_MPH = 0.008
+WIND_CAP_MPH = 30.0                            # past this the number is a guess anyway
+# Rain and snow: fewer throws, worse throws. Rain is mild -- a wet ball
+# costs a few percent -- and snow is a different sport, about three times it.
+RAIN_PASS_EFF, RAIN_PASS_VOL, RAIN_RUSH_VOL = 0.97, 0.97, 1.04
+SNOW_PASS_EFF, SNOW_PASS_VOL, SNOW_RUSH_VOL = 0.92, 0.90, 1.10
+RAIN_MIN_PROB = 50.0                           # percent, at its worst over the game
+RAIN_MIN_INCHES = 0.05                         # over the game
+SNOW_MIN_INCHES = 0.1
+# Below freezing the ball is harder to grip and catch. Small, and it is the
+# only thing temperature does here -- heat changes pace, not props.
+FREEZING_F = 32.0
+COLD_PASS_EFF = 0.97
+WEATHER_CLAMP = (0.75, 1.25)
+# Scoring is deliberately NOT touched by any of this. The scoring multiplier
+# comes from the implied team total, and the market's total already has the
+# forecast in it; docking it again would count the wind twice.
+
+# --- next man up -----------------------------------------------------------
+# When a player is out, the touches he would have had do not vanish; the
+# depth chart says where they go. The man directly below him on the chart
+# takes NEXT_MAN_SHARE of them and the rest is spread over the group in
+# proportion to what each player already gets -- a lost lead back is mostly
+# the second back's carries, a lost receiver is mostly everyone else's
+# targets. The next man is never handed more than the absentee had, and
+# nobody in the pool gains more than POOL_GAIN_CAP of his own volume.
+#
+# "Directly below him" is by volume, not by ESPN's order: a back on reserve
+# gets moved to the bottom of the chart, and read literally that would send
+# a second back's carries to the lead back. The chart's order decides who
+# has been promoted into the lineup, and who the quarterback is.
+#
+# Quarterback is not a redistribution at all. One man takes every snap, so
+# the healthy man the chart puts first is projected on a starter's
+# attempts: the team's own passes a game, less the few that go elsewhere,
+# or the biggest passer the team has lost this season, whichever is more --
+# if either beats his own history. A traded starter with one partial game
+# here and a backup pressed into the job both read as backups off their
+# logs, and both are exactly who the book has just posted a starter's line
+# for. Only a passer who is out, on reserve or exempt has lost a role; a
+# cut or retired one's attempts belong to the past.
+STARTER_ATT_SHARE = 0.95    # of the team's pass attempts that the starter throws
+#
+# Each recipient is only corrected for the part of his read that was built
+# with the absentee on the field: his current-season share times the
+# absentee's share of this season's games, plus his last-season share times
+# the absentee's of last season's, and that second part only if both of
+# them were on this team last season. A receiver on reserve since August
+# has been missing from every current-season log his teammates have.
+STARTERS = {"QB": 1, "RB": 1, "WR": 3, "TE": 1}
+NEXT_MAN_SHARE = {"RB": 0.75, "WR": 0.35, "TE": 0.55}
+VACATED_KEYS = {"RB": ("car", "tgt"), "WR": ("tgt",), "TE": ("tgt",)}
+QB_VACATES = {"out", "doubtful", "RES", "EXE", "PUP", "SUS"}
+POOL_GAIN_CAP = 0.35        # of the recipient's own volume
+MIN_VACATED = 1.0           # touches a game; below this nobody notices he is gone
+MIN_ROLE_NOTE = 0.5         # touches a game before the row bothers to say so
+PROMOTED_CONF = 0.80        # a role read off a depth chart is not a role we have watched
 
 MARKETS = ("pass_yds", "rush_yds", "rec_yds", "rush_rec_yds",
            "pass_tds", "interceptions", "anytime_td")
@@ -270,9 +364,14 @@ _STAT_KEYS = (
 )
 
 
-def full_time_reference(weeks: list[dict], current_season: int) -> tuple[float, float]:
-    """(total weight, effective sample) a player would carry if he had played
-    every game in the window.
+def full_time_reference(weeks: list[dict],
+                        current_season: int) -> tuple[float, float, dict]:
+    """(total weight, effective sample, weight per week) a player would carry
+    if he had played every game in the window.
+
+    The per-week breakdown is what lets a player be measured against only the
+    part of the calendar he was eligible for -- see the debut handling in
+    `player_baselines`.
 
     A raw weight sum means nothing on its own -- the decay caps it around 8
     however long a career is -- so "how much have we got on this guy" only
@@ -284,33 +383,42 @@ def full_time_reference(weeks: list[dict], current_season: int) -> tuple[float, 
     """
     cal = timeline(weeks)
     if not cal:
-        return 1.0, 1.0
+        return 1.0, 1.0, {}
     byes = {min(w for s, w in cal if s == season) for season in {s for s, _ in cal}}
     fake = [{"season": s, "week": w} for s, w in cal
             if not (w in byes and (s, w) != cal[-1])]
-    ws = [w for w in game_weights(fake, current_season, cal) if w > 0]
+    raw = game_weights(fake, current_season, cal)
+    by_week = {(r["season"], r["week"]): w for r, w in zip(fake, raw) if w > 0}
+    ws = [w for w in raw if w > 0]
     if not ws:
-        return 1.0, 1.0
+        return 1.0, 1.0, {}
     total = sum(ws)
-    return total, (total ** 2) / sum(w * w for w in ws)
+    return total, (total ** 2) / sum(w * w for w in ws), by_week
 
 
 def player_baselines(weeks: list[dict], current_season: int,
-                     out_weeks: dict[str, set] | None = None) -> dict[str, dict]:
+                     out_weeks: dict[str, set] | None = None,
+                     entry_years: dict[str, int] | None = None) -> dict[str, dict]:
     """Recency-weighted per-game volume, efficiency and game-to-game spread.
 
     `out_weeks` is nflverse.out_weeks(): the weeks each player was ruled off
-    the field. It changes nothing about the projection -- only how much of
-    the calendar we hold him to when judging how well we know him.
+    the field. `entry_years` is nflverse.entry_years(): the season each player
+    came into the league. Neither changes anything about the projection --
+    they only change how much of the calendar we hold him to when judging how
+    well we know him.
     """
     absent = out_weeks or {}
+    entered = entry_years or {}
     by_player: dict[str, list[dict]] = collections.defaultdict(list)
     for r in weeks:
         by_player[r["player_id"]].append(r)
 
     cal = timeline(weeks)
     cal_weeks = set(cal)
-    ref_weight, ref_ess = full_time_reference(weeks, current_season)
+    ref_weight, ref_ess, ref_by_week = full_time_reference(weeks, current_season)
+    # The smallest reference anyone is measured against, whatever his debut:
+    # the weight the decay puts on the DEBUT_MIN_GAMES most recent games.
+    min_ref = sum(GAME_DECAY ** i for i in range(DEBUT_MIN_GAMES))
     out: dict[str, dict] = {}
     for pid, rows in by_player.items():
         rows.sort(key=lambda r: (r["season"], r["week"]))
@@ -355,6 +463,26 @@ def player_baselines(weeks: list[dict], current_season: int,
             if w > 0)
         avail_weight = max(ref_weight - lost, ref_weight * (1.0 - MAX_EXCUSED))
 
+        # Weeks before he had ever played come off the same bottom, and they
+        # come off in full -- they are not time he was unavailable, they are
+        # time he was not in the league. Held to the whole two-season
+        # calendar a rookie scored about half of what the identical veteran
+        # scored, which put every one of them under the board's default
+        # threshold no matter how plainly he had a role.
+        #
+        # Scoped to a debut in the CURRENT season. A veteran whose earliest
+        # log in the window is old news is exactly the player we should be
+        # unsure about, and he keeps the full reference.
+        debut = pairs[0][0]
+        entry = entered.get(pid)
+        rookie = entry == current_season if entry else (
+            debut["season"] == current_season and
+            not any(r["season"] < current_season for r, _ in pairs))
+        if rookie:
+            pre_debut = sum(w for g, w in ref_by_week.items()
+                            if g < (debut["season"], debut["week"]))
+            avail_weight = max(avail_weight - pre_debut, min_ref)
+
         base = {
             "player_id": pid,
             "name": last["name"],
@@ -367,9 +495,16 @@ def player_baselines(weeks: list[dict], current_season: int,
             "ref_ess": ref_ess,
             "ref_weight": ref_weight,
             "avail_weight": avail_weight,
+            "rookie": rookie,
+            "entry_year": entry,
             "games_missed_out": len(missed),
             "games_cur": sum(1 for r, _ in pairs if r["season"] == current_season),
             "games_prev": sum(1 for r, _ in pairs if r["season"] < current_season),
+            # where he played last season, so a teammate's absence is only
+            # read into the part of his history they actually shared
+            "prev_team": collections.Counter(
+                r["team"] for r, _ in pairs if r["season"] < current_season
+            ).most_common(1)[0][0] if any(r["season"] < current_season for r, _ in pairs) else "",
             "cur_share": sum(w for r, w in pairs if r["season"] == current_season) / gw,
         }
         for field, key in _STAT_KEYS:
@@ -476,6 +611,185 @@ def _shrink_to_position(baselines: dict[str, dict]) -> None:
             b[rate] = w * b[rate] + (1 - w) * means[rate]
 
 
+# which yardage market's game-to-game spread moves with which volume
+_VOLUME_MARKETS = {"att": ("pass_yds",), "car": ("rush_yds",), "tgt": ("rec_yds",)}
+
+
+def team_pass_attempts(weeks: list[dict], current_season: int) -> dict[str, float]:
+    """{team: pass attempts a game}, weighted the way the baselines are, so
+    the chart's starter can be read on what his offense actually throws."""
+    cal = timeline(weeks)
+    per_game: dict[str, dict[tuple, float]] = collections.defaultdict(
+        lambda: collections.defaultdict(float))
+    for r in weeks:
+        if r["team"]:
+            per_game[r["team"]][(r["season"], r["week"])] += r["attempts"]
+    out: dict[str, float] = {}
+    for team, games in per_game.items():
+        rows = [{"season": s, "week": w} for s, w in sorted(games)]
+        weights = game_weights(rows, current_season, cal)
+        wsum = sum(weights)
+        if wsum > 0:
+            out[team] = sum(games[(r["season"], r["week"])] * w
+                            for r, w in zip(rows, weights)) / wsum
+    return out
+
+
+def next_man_up(chart: dict[str, list[dict]], bases: dict[str, dict],
+                gone: dict[str, str], team: str, charted: set[str],
+                week: int, team_att: float = 0.0) -> dict[str, dict]:
+    """Adjusted baselines for one team's week: {player_id: a copy of his
+    baseline with the volume that fell to him}. Players whose volume does
+    not change are not in it.
+
+    `chart` is depth.chart()["teams"][team], {pos: [{id, name, rank}, ...]}
+    in depth order, and `charted` is every id on any team's chart. `gone` is
+    {player_id: why} for everyone ruled out, doubtful or on a reserve list
+    this week -- the why is a report status or a roster status code.
+
+    A long-term absentee drops off ESPN's chart entirely, so the absent are
+    also looked for among this team's baselines: gone, on nobody's chart,
+    last seen playing for this team. Restricting that to players on NO
+    chart is what stops a back who was traded and then hurt from being
+    vacated from his old team as well as his new one.
+    """
+    played = max(week - 1, 1)
+
+    def vol(pid: str, key: str) -> float:
+        b = bases.get(pid)
+        return float(b.get(key, 0.0)) if b else 0.0
+
+    def overlap(absent_id: str, pid: str) -> float:
+        """How much of `pid`'s read was built with `absent_id` on the field."""
+        a, b = bases.get(absent_id), bases.get(pid)
+        if not a or not b:
+            return 0.0
+        cur = _clamp(a.get("games_cur", 0) / played, 0.0, 1.0)
+        prev = _clamp(a.get("games_prev", 0) / 17.0, 0.0, 1.0)
+        if not (a.get("prev_team") == team and b.get("prev_team") == team):
+            prev = 0.0                    # last season they were not together here
+        s = b.get("cur_share", 0.0)
+        return s * cur + (1 - s) * prev
+
+    delta: dict[str, dict[str, float]] = collections.defaultdict(
+        lambda: collections.defaultdict(float))
+    sources: dict[str, dict[str, dict[str, float]]] = collections.defaultdict(
+        lambda: collections.defaultdict(lambda: collections.defaultdict(float)))
+    next_cap: dict[tuple[str, str], float] = {}
+    promoted_ids: set[str] = set()
+
+    def give(pid: str, key: str, amount: float, name: str) -> None:
+        if amount > 0:
+            delta[pid][key] += amount
+            sources[pid][key][name] += amount
+
+    def fit(pos: str) -> list[dict]:
+        return [p for p in chart.get(pos, []) if p["id"] not in gone and p["id"] in bases]
+
+    def off_chart(pos: str) -> list[dict]:
+        return [{"id": pid, "name": b["name"], "rank": 0} for pid, b in bases.items()
+                if (pid in gone and pid not in charted and b.get("team") == team
+                    and (b.get("position_group") or b.get("position")) == pos)]
+
+    # --- quarterback: a starter's attempts, or nothing -----------------------
+    qbs = chart.get("QB", [])
+    room = fit("QB")
+    starter_flag: dict[str, str] = {}
+    if room:
+        starter = room[0]
+        lost = [q for q in qbs if q["id"] in gone and q["id"] in bases]
+        lost += [q for q in off_chart("QB") if gone.get(q["id"]) in QB_VACATES]
+        best = max(lost, key=lambda q: vol(q["id"], "att"), default=None)
+        lost_att = vol(best["id"], "att") if best else 0.0
+        want = max(lost_att, STARTER_ATT_SHARE * team_att)
+        have = vol(starter["id"], "att")
+        if want - have >= MIN_VACATED:
+            by_loss = lost_att >= STARTER_ATT_SHARE * team_att and best is not None
+            give(starter["id"], "att", want - have, best["name"] if by_loss else "the chart")
+            next_cap[(starter["id"], "att")] = want
+            starter_flag[starter["id"]] = "lost" if by_loss else "chart"
+            # a promotion only if the chart still has a lost man ahead of
+            # him; once ESPN has moved him up he is simply the starter
+            if any(q["rank"] < starter["rank"] for q in lost if q.get("rank")):
+                promoted_ids.add(starter["id"])
+
+    # --- the touches ---------------------------------------------------------
+    runners = fit("RB")
+    catchers = [p for pos in ("WR", "TE", "RB") for p in fit(pos)]
+    for pos, keys in VACATED_KEYS.items():
+        n_start = STARTERS[pos]
+        healthy = fit(pos)
+        primary = keys[0]
+        absent = [p for p in chart.get(pos, []) if p["id"] in gone and p["id"] in bases]
+        absent += off_chart(pos)
+        if not absent:
+            continue
+        # whoever the absences moved into the lineup
+        for i, p in enumerate(healthy):
+            if i < n_start and p["rank"] > n_start:
+                promoted_ids.add(p["id"])
+        by_volume = sorted(healthy, key=lambda p: -vol(p["id"], primary))
+
+        for a in absent:
+            mine = vol(a["id"], primary)
+            nxt = next((h for h in by_volume if vol(h["id"], primary) <= mine), None)
+            for key in keys:
+                raw = vol(a["id"], key)
+                if raw < MIN_VACATED:
+                    continue
+                share = NEXT_MAN_SHARE[pos] if nxt else 0.0
+                if nxt:
+                    give(nxt["id"], key, raw * share * overlap(a["id"], nxt["id"]), a["name"])
+                    next_cap[(nxt["id"], key)] = max(next_cap.get((nxt["id"], key), 0.0), raw)
+                pool = [p for p in (runners if key == "car" else catchers)
+                        if p["id"] != a["id"] and (nxt is None or p["id"] != nxt["id"])]
+                weights = {p["id"]: vol(p["id"], key) for p in pool}
+                wsum = sum(weights.values())
+                if wsum <= 0:
+                    continue
+                for pid, w in weights.items():
+                    give(pid, key, raw * (1 - share) * (w / wsum) * overlap(a["id"], pid),
+                         a["name"])
+
+    out: dict[str, dict] = {}
+    for pid, d in delta.items():
+        b = dict(bases[pid])
+        gain: dict[str, float] = {}
+        for key, amt in d.items():
+            was = b[key]
+            cap = next_cap.get((pid, key))
+            if cap is not None:
+                new = min(was + amt, max(was, cap))     # never more than the man he replaced
+            else:
+                new = was + min(amt, POOL_GAIN_CAP * was)
+            if new - was < 1e-9:
+                continue
+            b[key] = new
+            gain[key] = new - was
+            ratio = new / was if was > 0 else 1.0
+            for market in _VOLUME_MARKETS[key]:
+                b[market + "_sd"] = b.get(market + "_sd", 0.0) * ratio
+            # a quarterback read on a starter's attempts is playing whole
+            # games, so his carries scale with his throws -- a passer whose
+            # history is half a game of each is not a 3-carry runner
+            if key == "att" and pid in starter_flag and b.get("car", 0.0) > 0:
+                b["car"] = b["car"] * ratio
+                gain["car"] = b["car"] - bases[pid]["car"]
+                b["rush_yds_sd"] = b.get("rush_yds_sd", 0.0) * ratio
+        if not gain:
+            continue
+        b["rush_rec_yds_sd"] = math.hypot(b["rush_yds_sd"], b["rec_yds_sd"])
+        b["role_change"] = {
+            "promoted": pid in promoted_ids,
+            "starter": starter_flag.get(pid, ""),
+            "gain": gain,
+            "from": {k: [n for n, _ in sorted(v.items(), key=lambda kv: -kv[1])]
+                     for k, v in sources[pid].items()},
+        }
+        out[pid] = b
+    return out
+
+
 def spread_priors(baselines: dict[str, dict]) -> dict[str, float]:
     """Typical game-to-game coefficient of variation per market, measured from
     the data rather than assumed, so a thin player's spread can be shrunk
@@ -494,16 +808,63 @@ def spread_priors(baselines: dict[str, dict]) -> dict[str, float]:
 # --------------------------------------------------------------------------
 # projection
 # --------------------------------------------------------------------------
+def weather_factors(wx: dict | None) -> dict:
+    """What the forecast does to volume and to the throw.
+
+    Returns {pass_eff, pass_vol, rush_vol, wind, kind, cold}. Neutral for a
+    dome, for a game with no forecast, and for one too far out to trust --
+    weather.py marks those `priced: False` and the header still shows them.
+    """
+    f = {"pass_eff": 1.0, "pass_vol": 1.0, "rush_vol": 1.0,
+         "wind": 0.0, "kind": "", "cold": False}
+    if not wx or wx.get("indoor") or not wx.get("priced"):
+        return f
+
+    wind = min(float(wx.get("wind") or 0.0), WIND_CAP_MPH)
+    over = max(wind - WIND_CALM_MPH, 0.0)
+    f["wind"] = wind
+    f["pass_eff"] *= 1.0 - WIND_PASS_EFF_PER_MPH * over
+    f["pass_vol"] *= 1.0 - WIND_PASS_VOL_PER_MPH * over
+    f["rush_vol"] *= 1.0 + WIND_RUSH_VOL_PER_MPH * over
+
+    snow = float(wx.get("snow") or 0.0)
+    if snow >= SNOW_MIN_INCHES or wx.get("snowing"):
+        f["kind"] = "snow"
+        f["pass_eff"] *= SNOW_PASS_EFF
+        f["pass_vol"] *= SNOW_PASS_VOL
+        f["rush_vol"] *= SNOW_RUSH_VOL
+    elif (float(wx.get("precip_prob") or 0.0) >= RAIN_MIN_PROB
+          and float(wx.get("precip") or 0.0) >= RAIN_MIN_INCHES):
+        f["kind"] = "rain"
+        f["pass_eff"] *= RAIN_PASS_EFF
+        f["pass_vol"] *= RAIN_PASS_VOL
+        f["rush_vol"] *= RAIN_RUSH_VOL
+
+    if float(wx.get("temp", 60.0)) <= FREEZING_F:
+        f["cold"] = True
+        f["pass_eff"] *= COLD_PASS_EFF
+
+    for k in ("pass_eff", "pass_vol", "rush_vol"):
+        f[k] = _clamp(f[k], *WEATHER_CLAMP)
+    return f
+
+
 def game_script(implied_team: float, implied_opp: float,
-                league_avg_team_total: float) -> dict:
-    """Volume and scoring multipliers implied by how the game is priced."""
+                league_avg_team_total: float, weather: dict | None = None) -> dict:
+    """Volume and scoring multipliers implied by how the game is priced,
+    and by what it will be played in."""
     margin = implied_team - implied_opp
+    wx = weather_factors(weather)
     return {
         "margin": margin,
         "implied": implied_team,
-        "pass_vol": _clamp(1.0 - PASS_VOLUME_PER_POINT * margin, *SCRIPT_CLAMP),
-        "rush_vol": _clamp(1.0 + RUSH_VOLUME_PER_POINT * margin, *SCRIPT_CLAMP),
+        # the spread's share is clamped on its own, then the weather's is
+        # multiplied on, so a windy blowout is not capped at a calm one
+        "pass_vol": _clamp(1.0 - PASS_VOLUME_PER_POINT * margin, *SCRIPT_CLAMP) * wx["pass_vol"],
+        "rush_vol": _clamp(1.0 + RUSH_VOLUME_PER_POINT * margin, *SCRIPT_CLAMP) * wx["rush_vol"],
+        "pass_eff": wx["pass_eff"],
         "scoring": _clamp(_safe(implied_team, league_avg_team_total, 1.0), 0.70, 1.35),
+        "weather": wx,
     }
 
 
@@ -511,16 +872,19 @@ def project(base: dict, defense: dict, script: dict) -> dict:
     """Every market for one player in one matchup. Yardage entries are point
     projections; count entries are Poisson rates."""
     pos_mult = defense.get("vs_" + base["position_group"], defense.get("pass", 1.0))
+    # the weather's tax on every throw -- wind and rain make the same
+    # attempt worth less, to the passer and to whoever it was meant for
+    throw = script.get("pass_eff", 1.0)
 
     att = base["att"] * script["pass_vol"]
     car = base["car"] * script["rush_vol"]
     tgt = base["tgt"] * script["pass_vol"]
 
     rush_yds = car * base["ypc"] * defense["rush"]
-    rec_yds = tgt * base["ypt"] * pos_mult
+    rec_yds = tgt * base["ypt"] * pos_mult * throw
 
     return {
-        "pass_yds": att * base["ypa"] * defense["pass"],
+        "pass_yds": att * base["ypa"] * defense["pass"] * throw,
         "rush_yds": rush_yds,
         "rec_yds": rec_yds,
         "rush_rec_yds": rush_yds + rec_yds,
@@ -572,8 +936,15 @@ def role_check(base: dict, market: str, projection: float, line: float,
     ahead of him. A line far below means the opposite. Either way the gap is
     information we do not have, and betting it is betting against the book's
     depth chart, not against its number.
+
+    A thin sample makes that test stricter, it does not decide it. A rookie
+    with three starts and a line sitting exactly on our number is not a
+    player whose role we are missing -- he is a player we have seen three
+    times, which is what the confidence meter is for. Setting him aside on
+    career length alone hid every rookie on the board.
     """
-    if base["eff_games"] < MIN_EFF_GAMES:
+    thin = base["eff_games"] < MIN_EFF_GAMES
+    if base["eff_games"] < MIN_ROLE_GAMES:
         return False, f"only {base['eff_games']:.1f} effective games of usage"
     if projection <= 0:
         return True, ""
@@ -584,16 +955,18 @@ def role_check(base: dict, market: str, projection: float, line: float,
         # already written him off is a stale usage read, not a find. Only
         # longshots are checked; a disagreement on a 40% favourite is a real
         # opinion, not a missing depth chart.
-        if 0 < market_prob < ATD_LONGSHOT and our_prob > ATD_MAX_RATIO * market_prob:
+        cap = THIN_ATD_MAX_RATIO if thin else ATD_MAX_RATIO
+        if 0 < market_prob < ATD_LONGSHOT and our_prob > cap * market_prob:
             return False, (f"we read {our_prob / market_prob:.1f}x the book's "
                            f"scoring chance - bigger role than we can see")
         return True, ""
     if market in COUNT:
         return True, ""
+    lo, hi = (THIN_ROLE_LOW, THIN_ROLE_HIGH) if thin else (ROLE_LOW, ROLE_HIGH)
     ratio = line / projection if projection else 0.0
-    if ratio > ROLE_HIGH:
+    if ratio > hi:
         return False, f"line is {ratio:.1f}x our usage read - bigger role than we can see"
-    if ratio < ROLE_LOW:
+    if ratio < lo:
         return False, f"line is {ratio:.1f}x our usage read - smaller role than we can see"
     return True, ""
 
@@ -754,8 +1127,16 @@ def drivers(base: dict, dprof: dict, script: dict, market: str,
         out.append({"kind": "volume", "lean": vol_lean(key),
                     "text": f"{_count(vol[key], singular, plural)} a game"})
 
+    # --- touches that fell to him ------------------------------------------
+    out.extend(_role_driver(base, market))
+
     # --- the matchup -------------------------------------------------------
     out.extend(_matchup_driver(dprof, market, pg, opponent))
+
+    # --- the weather -------------------------------------------------------
+    # Ahead of the script on purpose: a row only has room for three reasons,
+    # and on the day it matters the wind is the reason.
+    out.extend(_weather_driver(script.get("weather") or {}, market, base))
 
     # --- game script -------------------------------------------------------
     # The dropback/carry story only belongs on the yardage markets. A
@@ -807,8 +1188,88 @@ def drivers(base: dict, dprof: dict, script: dict, market: str,
     # Rows only have room for the first two or three of these, so the ones
     # that actually moved the number have to come first. Volume leads because
     # it is the biggest term; caveats trail because they qualify the rest.
-    order = {"volume": 0, "matchup": 1, "script": 1, "efficiency": 1, "sample": 3}
+    order = {"volume": 0, "role": 0, "matchup": 1, "weather": 1, "script": 1,
+             "efficiency": 1, "sample": 3}
     return sorted(out, key=lambda d: (order[d["kind"]], 0 if d["lean"] else 1))
+
+
+_ROLE_KEYS = {
+    "pass_yds": ("att",), "pass_tds": ("att",), "interceptions": ("att",),
+    "rush_yds": ("car",), "rec_yds": ("tgt",),
+    "rush_rec_yds": ("car", "tgt"), "anytime_td": ("car", "tgt"),
+}
+_ROLE_WORD = {"att": "attempts", "car": "carries", "tgt": "targets"}
+
+
+def _role_driver(base: dict, market: str) -> list[dict]:
+    """The volume a teammate's absence handed him, when it is enough to
+    matter to this market. "next man up" names the promotion; the rest of
+    the group just gets the arithmetic."""
+    rc = base.get("role_change")
+    if not rc:
+        return []
+    keys = [k for k in _ROLE_KEYS[market] if rc["gain"].get(k, 0.0) >= MIN_ROLE_NOTE]
+    if not keys:
+        return []
+    what = " and ".join(f"{rc['gain'][k]:.0f} {_ROLE_WORD[k]}" for k in keys)
+    if rc.get("starter") == "chart":
+        own = base["att"] - rc["gain"].get("att", 0.0)
+        return [{"kind": "role", "lean": 1,
+                 "text": f"starts per the depth chart - read on his offense's "
+                         f"{base['att']:.0f} attempts, not his own {own:.0f}"}]
+    who: list[str] = []
+    for k in keys:
+        for n in rc["from"].get(k, []):
+            if n not in who:
+                who.append(n)
+    names = ", ".join(who[:2]) + (f" and {len(who) - 2} more" if len(who) > 2 else "")
+    lead = "next man up: " if rc["promoted"] else ""
+    return [{"kind": "role", "lean": 1,
+             "text": f"{lead}+{what} with {names} out"}]
+
+
+def _weather_driver(wx: dict, market: str, base: dict) -> list[dict]:
+    """The forecast, only when it moved the number. A dome and a calm day
+    say nothing -- there is no row that gets better for being told it was
+    68 and still."""
+    if not wx:
+        return []
+    moved = max(abs(wx.get("pass_eff", 1.0) - 1), abs(wx.get("pass_vol", 1.0) - 1),
+                abs(wx.get("rush_vol", 1.0) - 1))
+    if moved < 0.03:
+        return []
+
+    bits = []
+    wind = wx.get("wind", 0.0)
+    if wind >= WIND_CALM_MPH + 3:
+        bits.append(f"{wind:.0f} mph wind")
+    if wx.get("kind"):
+        bits.append(wx["kind"])
+    if wx.get("cold"):
+        bits.append("below freezing")
+    what = ", ".join(bits) or "the forecast"
+
+    if market in ("pass_yds", "rec_yds", "pass_tds"):
+        return [{"kind": "weather", "lean": -1,
+                 "text": f"{what} - fewer throws, and each one worth less"}]
+    if market == "interceptions":
+        return [{"kind": "weather", "lean": -1,
+                 "text": f"{what} - fewer throws to pick off"}]
+    if market == "rush_yds":
+        return [{"kind": "weather", "lean": 1,
+                 "text": f"{what} pushes the game to the ground"}]
+    if market == "rush_rec_yds":
+        # both halves move; the sign is whichever half he lives on
+        ground = base.get("car", 0.0) >= base.get("tgt", 0.0)
+        return [{"kind": "weather", "lean": 1 if ground else -1,
+                 "text": f"{what} - more carries, fewer targets"}]
+    # anytime touchdown: his scores come from somewhere, and the weather
+    # moves the ball toward the run
+    rush_share = base.get("car", 0.0) * base.get("rush_td_rate", 0.0)
+    rec_share = base.get("tgt", 0.0) * base.get("rec_td_rate", 0.0)
+    ground = rush_share >= rec_share
+    return [{"kind": "weather", "lean": 1 if ground else -1,
+             "text": f"{what} shifts scoring toward the run"}]
 
 
 def _matchup_driver(dprof: dict, market: str, pg: str, opp: str) -> list[dict]:

@@ -13,6 +13,7 @@ import datetime as dt
 import html
 
 import model
+import weather
 
 # nflverse abbreviation -> the slug ESPN's logo CDN uses
 ESPN_SLUG = {"WAS": "wsh", "LA": "lar"}
@@ -154,6 +155,14 @@ STYLE = """
 .np-mid .k { font-family:'Space Mono',monospace; font-size:16px; color:var(--acid); font-weight:700; }
 .np-mid .v { font-size:10px; color:var(--dim); letter-spacing:1.6px; text-transform:uppercase; }
 
+/* the forecast, under the spread. Quiet in a dome or on a calm day; it only
+   takes a colour when it is the kind of day that moves the number. */
+.np-wx { font-family:'Space Mono',monospace; font-size:10px; letter-spacing:1px;
+         text-transform:uppercase; color:var(--dimmer); margin-top:8px; white-space:nowrap; }
+.np-wx.calm   { color:var(--dim); }
+.np-wx.wet    { color:var(--cyan); }
+.np-wx.rough  { color:var(--acid); }
+
 /* defense read chip */
 .np-read { display:inline-block; font-size:10px; letter-spacing:1.3px; text-transform:uppercase;
            padding:3px 8px; border:1px solid currentColor; transform:skewX(-11deg);
@@ -180,6 +189,10 @@ STYLE = """
 .np-name { font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden;
            text-overflow:ellipsis; }
 .np-meta { font-size:10.5px; color:var(--dim); letter-spacing:.7px; text-transform:uppercase; }
+/* Quiet by design: it qualifies the read, it is not a recommendation. */
+.np-tag  { font-size:9px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
+           color:var(--dim); border:1px solid var(--rule); border-radius:3px;
+           padding:1px 4px; margin-left:5px; vertical-align:1.5px; }
 .np-mkt  { font-size:10px; letter-spacing:1.1px; text-transform:uppercase; color:var(--dim);
            border-left:2px solid var(--rule); padding-left:9px; }
 
@@ -319,6 +332,10 @@ def game_panel(game: dict, props: list[dict], away_read: str, home_read: str,
         '<div class="np-empty">No props clear the filters for this game.</div>')
     live = sum(1 for p in props if p["playable"])
 
+    wx_text = weather.describe(game.get("weather"))
+    wx = (f'<div class="np-wx {weather.mood(game.get("weather"))}">{esc(wx_text)}</div>'
+          if wx_text else "")
+
     return (
         f'<details class="np-game"{" open" if expanded else ""}>'
         '<summary><div class="np-bar">'
@@ -326,7 +343,7 @@ def game_panel(game: dict, props: list[dict], away_read: str, home_read: str,
         + f'<div class="np-mid"><div class="k">{game["total"]:g}</div>'
           f'<div class="v">total</div>'
           f'<div class="k" style="margin-top:6px">{esc(fav)}</div>'
-          f'<div class="v">spread</div></div>'
+          f'<div class="v">spread</div>{wx}</div>'
         + _side(game["home"], game["implied_home"], home_read, home=True)
         + f'<div class="np-tail"><div class="c">{_headline(props)}'
           f'<b>{live}</b> read{"" if live == 1 else "s"}</div>'
@@ -380,12 +397,25 @@ def _book_cell(p: dict) -> str:
     return f'<div class="np-book">{body}</div>'
 
 
+def _tag(p: dict) -> str:
+    """A rookie's read is built on a handful of games by definition, and the
+    pip meter says the read is short without saying why. Naming it is the
+    difference between a number you distrust and one you can place. The same
+    goes for a player promoted by someone else's injury: his volume is
+    inferred from the depth chart, not watched."""
+    tags = ""
+    if p.get("rookie"):
+        tags += ' <span class="np-tag">rookie</span>'
+    if p.get("promoted"):
+        tags += ' <span class="np-tag">next man up</span>'
+    return tags
+
+
 def _prop_row(p: dict) -> str:
     face = (f'<img class="np-face" src="{esc(p["headshot"])}" alt="">'
             if p["headshot"] else '<div class="np-face"></div>')
     status = (f' &middot; <span style="color:#FF8A00">{esc(p["status"])}</span>'
               if p["status"] else "")
-
     if not p["playable"]:
         detail = f'<div class="np-flagnote">set aside &mdash; {esc(p["reason"])}</div>'
     else:
@@ -394,7 +424,7 @@ def _prop_row(p: dict) -> str:
     return (
         f'<div class="np-row{"" if p["playable"] else " flagged"}">'
         f'{face}'
-        f'<div class="np-who"><div class="np-name">{esc(p["player"])}</div>'
+        f'<div class="np-who"><div class="np-name">{esc(p["player"])}{_tag(p)}</div>'
         f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])} '
         f'vs {esc(p["opponent"])}{status}</div></div>'
         f'<div class="np-mkt">{esc(p["market_label"])}</div>'
@@ -417,7 +447,7 @@ def _scorer_row(rank: int, p: dict) -> str:
     return (
         f'<div class="np-sc">'
         f'<div class="np-rank{cool}">{rank}</div>{face}'
-        f'<div class="np-who"><div class="np-name">{esc(p["player"])}</div>'
+        f'<div class="np-who"><div class="np-name">{esc(p["player"])}{_tag(p)}</div>'
         f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])}</div></div>'
         f'<div class="np-game-of"><b>{esc(p["team"])}</b> vs {esc(p["opponent"])}<br>'
         f'{p["script"]["implied"]:.1f} implied pts</div>'
@@ -441,7 +471,7 @@ def _yardage_row(rank: int, p: dict) -> str:
     return (
         f'<div class="np-sc">'
         f'<div class="np-rank{cool}">{rank}</div>{face}'
-        f'<div class="np-who"><div class="np-name">{esc(p["player"])}</div>'
+        f'<div class="np-who"><div class="np-name">{esc(p["player"])}{_tag(p)}</div>'
         f'<div class="np-meta">{esc(p["position"])} &middot; {esc(p["team"])}</div></div>'
         f'<div class="np-game-of"><b>{esc(p["team"])}</b> vs {esc(p["opponent"])}<br>'
         f'{esc(confidence_word(p["confidence"]))}</div>'

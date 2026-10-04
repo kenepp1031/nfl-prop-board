@@ -153,7 +153,8 @@ def _all_offers(event_ids: str, keys: list[str]) -> dict[str, list[dict]]:
     return out
 
 
-def raw_offers(season: int, week: int, markets: list[str] | None = None) -> dict:
+def raw_offers(season: int, week: int, markets: list[str] | None = None,
+               max_age_hours: float | None = None) -> dict:
     """Every posted prop for one week with EVERY book's price still attached.
 
     Deliberately book-agnostic. One offer carries DraftKings' number and
@@ -161,7 +162,11 @@ def raw_offers(season: int, week: int, markets: list[str] | None = None) -> dict
     between them is a filter, not another minute of paging. Memoised on disk
     as well, so a restart -- or a second person opening the board -- reads a
     file instead of the network.
+
+    `max_age_hours` overrides that memo's ten-minute clock. The nightly
+    refresh passes 0 to force a real pull; nothing else should.
     """
+    ttl = OFFERS_TTL_HOURS if max_age_hours is None else max_age_hours
     keys = list(markets or MARKETS)
     name = f"offers_{season}_w{week}_{'-'.join(sorted(keys))}.json"
 
@@ -176,7 +181,7 @@ def raw_offers(season: int, week: int, markets: list[str] | None = None) -> dict
             "offers": _all_offers(ids, keys),
         }
 
-    return cached_json(name, OFFERS_TTL_HOURS, build)
+    return cached_json(name, ttl, build)
 
 
 def _price(books: list[dict], book_id: int) -> tuple[float | None, float | None]:

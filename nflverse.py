@@ -17,6 +17,8 @@ WEEKLY_URL = ("https://github.com/nflverse/nflverse-data/releases/download/"
 GAMES_URL = "https://github.com/nflverse/nfldata/raw/master/data/games.csv"
 INJURY_URL = ("https://github.com/nflverse/nflverse-data/releases/download/"
               "injuries/injuries_{year}.csv")
+ROSTER_URL = ("https://github.com/nflverse/nflverse-data/releases/download/"
+              "rosters/roster_{year}.csv")
 
 # The current season's file is rewritten after every game; older seasons never
 # change again, so they can sit in the cache for a week.
@@ -100,6 +102,9 @@ def schedule(season: int) -> list[dict]:
             "spread": spread,
             "total": total,
             "roof": r.get("roof", ""),
+            # where it is played, so the forecast has somewhere to point
+            "stadium_id": r.get("stadium_id", ""),
+            "stadium": r.get("stadium", ""),
             "divisional": r.get("div_game") == "1",
             # implied team totals, the scoring environment each side is priced into
             "implied_home": total / 2 + spread / 2 if total else 0.0,
@@ -143,22 +148,126 @@ def out_weeks(years: list[int], current_year: int) -> dict[str, set[tuple]]:
     return dict(gone)
 
 
-def injuries(season: int) -> dict[tuple[str, str], str]:
-    """{(team, lowercased player name): status}. Missing file is not fatal --
-    the board just loses its OUT/QUESTIONABLE tags."""
+def entry_years(season: int) -> dict[str, int]:
+    """{player_id: the season he entered the league}.
+
+    A rookie has no game logs from last season, and without this the model
+    reads that absence the same way it reads a veteran who was benched: as
+    time we failed to learn anything about him. He was not in the league to
+    have a role. This is what lets `player_baselines` tell the two apart.
+
+    Keyed on `gsis_id`, the same identifier the weekly stats call
+    `player_id`, so the join is exact -- no name matching. The roster file
+    carries one row per player per week; the entry year does not change
+    inside a season, so the first row for a player wins.
+
+    A missing file is not fatal. Without it nobody is known to be a rookie
+    and the debut heuristic in `player_baselines` takes over.
+    """
+    try:
+        text = cached_fetch(f"roster_{season}.csv",
+                            ROSTER_URL.format(year=season), CURRENT_HOURS)
+    except Exception:
+        return {}
+    out: dict[str, int] = {}
+    for r in csv.DictReader(io.StringIO(text)):
+        pid = (r.get("gsis_id") or "").strip()
+        if not pid or pid in out:
+            continue
+        # rookie_year is the season he first appeared; entry_year is when he
+        # was drafted or signed. They differ for a player who spent his draft
+        # year on IR, and the one we want is when he first had a role to read.
+        for field in ("rookie_year", "entry_year"):
+            try:
+                out[pid] = int(r[field])
+                break
+            except (KeyError, TypeError, ValueError):
+                continue
+    return out
+
+
+# Roster status codes that mean a player is not available to play. ACT is the
+# active roster and DEV the practice squad, whose players get elevated on
+# Saturdays; everything else -- reserve (injured, PUP, suspended), cut,
+# retired, exempt, inactive -- is off the field, and unlike an injury
+# designation it never appears on the weekly report.
+RESERVE = {"RES", "PUP", "SUS", "CUT", "RET", "EXE", "INA"}
+
+
+def roster_status(season: int) -> dict[str, str]:
+    """{player_id: roster status}, from each player's latest row.
+
+    The weekly report only lists players who might play. A receiver placed on
+    injured reserve in week 1 is on nobody's report in week 3, and without
+    this the board would still see his targets as spoken for. A missing file
+    is not fatal; nobody is known to be on reserve.
+    """
+    try:
+        text = cached_fetch(f"roster_{season}.csv",
+                            ROSTER_URL.format(year=season), CURRENT_HOURS)
+    except Exception:
+        return {}
+    latest: dict[str, tuple[int, str]] = {}
+    for r in csv.DictReader(io.StringIO(text)):
+        pid = (r.get("gsis_id") or "").strip()
+        if not pid:
+            continue
+        try:
+            wk = int(r.get("week") or 0)
+        except ValueError:
+            wk = 0
+        status = (r.get("status") or "").strip().upper()
+        if pid not in latest or wk >= latest[pid][0]:
+            latest[pid] = (wk, status)
+    return {pid: status for pid, (_, status) in latest.items()}
+
+
+def injuries(season: int) -> dict[tuple, dict]:
+    """The season's injury reports, one entry per player per week.
+
+    Keyed BY WEEK, because a report is about one game. The old version
+    folded the whole season into one name -> status map, so a back ruled
+    out in week 1 with no designation since was still "listed out" in week
+    3, sitting greyed under the line the book had just posted for him. A
+    week's report is the only thing that says anything about that week.
+
+    Each entry is {status, injury, practice}:
+      status    Out / Doubtful / Questionable, or "" before the Friday
+                designations are posted
+      injury    the body part, lowercased, for the row to say
+      practice  "DNP" when he missed practice and has no designation yet --
+                the one practice status worth a tag. Limited and Full are
+                not injuries and just clutter every row they land on.
+
+    Reachable two ways: (week, gsis_id) is the exact join -- it is the same
+    identifier the weekly stats call player_id -- and (week, team, name) is
+    the fallback. A missing file is not fatal; the board just loses its tags.
+    """
     try:
         text = cached_fetch(f"injuries_{season}.csv",
                             INJURY_URL.format(year=season), CURRENT_HOURS)
     except Exception:
         return {}
-    # Only the game-status designations. practice_status carries strings like
-    # "Full Participation In Practice", which is not an injury and just
-    # clutters every row it lands on.
-    real = {"out", "doubtful", "questionable"}
-    out: dict[tuple[str, str], str] = {}
+    out: dict[tuple, dict] = {}
     for r in csv.DictReader(io.StringIO(text)):
+        if r.get("season_type") != "REG":
+            continue
+        try:
+            week = int(r.get("week") or 0)
+        except ValueError:
+            continue
         status = (r.get("report_status") or "").strip()
+        practice = (r.get("practice_status") or "").strip().lower()
+        practice = "DNP" if practice.startswith("did not") else ""
+        if not status and not practice:
+            continue                      # nothing a prop row needs to say
+        hurt = (r.get("report_primary_injury") or r.get("practice_primary_injury") or "")
+        entry = {"status": status, "injury": hurt.strip().lower(), "practice": practice,
+                 "team": team(r.get("team"))}
+        pid = (r.get("gsis_id") or "").strip()
         name = (r.get("full_name") or "").strip().lower()
-        if status.lower() in real and name:
-            out[(team(r.get("team")), name)] = status
+        if pid:
+            out[(week, pid)] = entry
+        if name:
+            out[(week, team(r.get("team")), name)] = entry
     return out

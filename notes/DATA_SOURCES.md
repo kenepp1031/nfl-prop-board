@@ -22,11 +22,28 @@ https://github.com/nflverse/nfldata/raw/master/data/games.csv
 game_id, week, gameday, gametime, away_team, home_team, spread_line, total_line,
 roof, surface, div_game, scores. Full 2026 season, all 18 weeks.
 
-## 3. Snaps / injuries / rosters
+## 3. Snaps / injuries / rosters / depth charts
 .../releases/download/snap_counts/snap_counts_{year}.csv
 .../releases/download/injuries/injuries_{year}.csv
 .../releases/download/rosters/roster_{year}.csv
-(depth_charts_{year}.csv also exists but is ~51 MB -- skip it.)
+.../releases/download/depth_charts/depth_charts_{year}.csv.gz
+
+Depth charts (verified 2026-09-25): ESPN's chart, snapshotted twice a day
+since March into one file per season with every snapshot kept -- 53 MB as
+.csv, 11 MB as .csv.gz, three weeks in. Columns: dt, team, player_name,
+espn_id, gsis_id, pos_grp, pos_name, pos_abb, pos_slot, pos_rank. The newest
+`dt` is the chart; pos_rank is the order within the position (RB1, RB2...);
+gsis_id is on 581 of 582 skill-position rows so the join to the game logs is
+exact. depth.py keeps the latest snapshot as cache/depth_{year}.json.
+
+Rosters carry `status` per player (ACT, DEV, RES, CUT, RET, EXE, INA) --
+RES is the reserve lists, which the weekly injury report never mentions.
+
+NFL 2.0 (C:\NFL 2.0) has no depth chart file either; it infers starters from
+snap_counts and scrapes ESPN's injuries page (www.espn.com/nfl/injuries,
+which does work from here -- only ESPN's site.api is blocked). That page
+lists Injured Reserve, but its Out/Questionable are pre-designation guesses,
+so the official nflverse report stays the source here.
 
 ## 4. DraftKings + FanDuel prop lines
 BettingPros v3. Undocumented public web API, key is the one their own site ships.
@@ -56,7 +73,24 @@ BettingPros v3. Undocumented public web API, key is the one their own site ships
     anytime TD            16   16   16   (16 offers = 16 games)
   FanDuel does not post rush+rec or interceptions; DraftKings covers all seven.
 
-## 5. Images
+## 5. Weather  (verified 2026-09-25)
+Open-Meteo forecast API. No key, no account, free for non-commercial use,
+10,000 requests a day -- the board makes one a week.
+  https://api.open-meteo.com/v1/forecast
+    ?latitude=42.7738,-22.9122&longitude=-78.7870,-43.2302   (a list: one result per venue)
+    &hourly=temperature_2m,apparent_temperature,precipitation_probability,
+            precipitation,snowfall,weather_code,wind_speed_10m,wind_gusts_10m
+    &wind_speed_unit=mph&temperature_unit=fahrenheit&precipitation_unit=inch
+    &timezone=America/New_York&forecast_days=16
+Asking for the hours in Eastern means a game's index in the list is just its
+nfldata kickoff hour. Two or more venues come back as a JSON list, one as a
+dict. Venue coordinates are a table in weather.py keyed on games.csv's
+`stadium_id` -- nfldata has no stadiums file this machine can reach.
+
+Also working from here, kept as a fallback: api.weather.gov (US venues only,
+needs a User-Agent, two calls per point).
+
+## 6. Images
   NFL shield  https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png
   team logo   https://a.espncdn.com/i/teamlogos/nfl/500/{abbr_lowercase}.png
   headshot    comes in the stats file as headshot_url (static.www.nfl.com)

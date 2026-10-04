@@ -1,5 +1,4 @@
 import collections
-import datetime as dt
 
 import streamlit as st
 
@@ -7,6 +6,7 @@ import board
 import lines
 import model
 import render
+import weather
 
 st.set_page_config(page_title="NFL Props", page_icon="🏈", layout="wide")
 
@@ -39,11 +39,15 @@ def load_lines(season: int, week: int, book_id: int):
     return lines.price(load_offers(season, week), book_id)
 
 
-def current_week(schedule: list[dict]) -> int:
-    """The week whose games have not all kicked off yet."""
-    today = dt.date.today().isoformat()
-    upcoming = [g["week"] for g in schedule if g["gameday"] >= today]
-    return min(upcoming) if upcoming else max(g["week"] for g in schedule)
+@st.cache_data(ttl=60 * 60 * weather.FORECAST_HOURS, refresh_mode="background",
+               show_spinner="Pulling the forecast...")
+def load_weather(season: int, week: int):
+    """The week's forecasts, one per outdoor game. A board without them is
+    still a board, so a refused pull is an empty dict, not an error page."""
+    try:
+        return weather.forecasts(season, week)
+    except Exception:
+        return {}
 
 
 # --- fast UI first, slow pulls after ---------------------------------------
@@ -65,7 +69,8 @@ with st.sidebar:
     view = st.radio("View", VIEWS, index=0,
                     help="Who scores and Top projections rank the whole slate "
                          "on our number. By game is the full matchup board.")
-    week = st.selectbox("Week", weeks, index=weeks.index(current_week(schedule)))
+    week = st.selectbox("Week", weeks,
+                        index=weeks.index(board.current_week(schedule)))
     book = st.segmented_control("Book", ["DraftKings", "FanDuel"],
                                 default="DraftKings", key="book")
     book = book or "DraftKings"
@@ -111,12 +116,14 @@ with st.sidebar:
     st.divider()
     st.caption(
         f"Defense reads blend {SEASON} with {SEASON - 1}, weighted toward "
-        f"this season. Lines from BettingPros; stats from nflverse.")
+        f"this season. Lines from BettingPros; stats and injury reports from "
+        f"nflverse; forecasts from Open-Meteo.")
 
 floor = dict((w, f) for f, w in model.CONF_WORDS)[min_conf]
 
 market_lines = load_lines(SEASON, week, lines.BOOKS[book])
-data = board.build(SEASON, week, book, stats, market_lines)
+data = board.build(SEASON, week, book, stats, market_lines,
+                   weather=load_weather(SEASON, week))
 
 
 def keep(p: dict) -> bool:
@@ -199,6 +206,20 @@ and every row shows which of the three actually moved it.
   the funnel read in each game header.
 - **Game environment** — the implied team total from the spread and the total.
   Favourites run more and throw less.
+- **Weather** — the forecast over the game window at outdoor venues. Wind
+  over 10 mph, rain, snow and freezing cold each take throws away and make
+  the ones that are thrown worth less, and push carries up. The matchup bar
+  shows the forecast; a row says so when it moved the number.
+
+**Injuries** are this week's report only. Out and doubtful set a player's
+props aside; questionable, or a missed practice before the Friday
+designations are out, is a tag on the row for you to weigh.
+
+**Next man up.** When a starter is out or on reserve, the depth chart says
+where his touches go: most of a lead back's carries to the second back, a
+receiver's targets spread over everyone else who catches passes. The player
+promoted into the lineup carries a *next man up* tag and a lighter pip
+meter, because his role is inferred rather than watched.
 
 **The book does not get a vote.** The line is printed beside our number so you
 can see the two side by side, but it never picks a side and never changes the
